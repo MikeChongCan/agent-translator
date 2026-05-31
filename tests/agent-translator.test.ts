@@ -73,9 +73,24 @@ test("extracts and injects xcstrings simple and plural entries", async () => {
   const job = await xcstringsAdapter.extract(file, config, { targetLanguage: "ja", mode: "missing" });
   expect(job.items).toHaveLength(2);
   await xcstringsAdapter.inject(job, output("ja", job.items.map((item) => [item.id, item.key.includes("Stop") ? "録画を停止" : item.source.replace("file", "ファイル")])) as TranslationOutput, config, "translated");
-  const written = JSON.parse(await read("Localizable.xcstrings"));
+  const raw = await read("Localizable.xcstrings");
+  expect(raw).toContain('"sourceLanguage": "en"');
+  expect(raw).not.toContain('"sourceLanguage" : "en"');
+  const written = JSON.parse(raw);
   expect(written.strings["Stop Recording"].localizations.ja.stringUnit.value).toBe("録画を停止");
   expect((await xcstringsAdapter.validate(file, config, "ja")).ok).toBe(true);
+});
+
+test("xcstrings preserves existing spaced-colon style when present", async () => {
+  await write(
+    "Localizable.xcstrings",
+    '{\n  "sourceLanguage" : "en",\n  "version" : "1.0",\n  "strings" : {\n    "Save" : {\n      "localizations" : {\n        "en" : {\n          "stringUnit" : {\n            "state" : "translated",\n            "value" : "Save"\n          }\n        }\n      }\n    }\n  }\n}\n'
+  );
+  const config = { ...(await loadConfig(root)), targetLanguages: ["ja"] };
+  const file = discovered("Localizable.xcstrings", "xcstrings", ["ja"]);
+  const job = await xcstringsAdapter.extract(file, config, { targetLanguage: "ja", mode: "missing" });
+  await xcstringsAdapter.inject(job, output("ja", [[job.items[0].id, "保存"]]), config, "translated");
+  expect(await read("Localizable.xcstrings")).toContain('"sourceLanguage" : "en"');
 });
 
 test("xcstrings extracts target-specific plural categories", async () => {

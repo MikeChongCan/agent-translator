@@ -90,7 +90,8 @@ export const xcstringsAdapter: Adapter = {
 
   async audit(file, config) {
     const abs = path.join(config.root, file.path);
-    const data = await readJson<Catalog>(abs);
+    const original = await readText(abs);
+    const data = JSON.parse(original) as Catalog;
     const strings = data.strings ?? {};
     const result: AuditResult = {
       file,
@@ -117,7 +118,8 @@ export const xcstringsAdapter: Adapter = {
 
   async extract(file, config, options) {
     const abs = path.join(config.root, file.path);
-    const data = await readJson<Catalog>(abs);
+    const original = await readText(abs);
+    const data = JSON.parse(original) as Catalog;
     const sourceLanguage = data.sourceLanguage ?? config.sourceLanguage;
     const items = flattenCatalog(data, sourceLanguage, options.targetLanguage)
       .filter((entry) => shouldExtract(entry.state, options))
@@ -143,7 +145,8 @@ export const xcstringsAdapter: Adapter = {
     const validation = validateTranslationOutput(file, output);
     if (!validation.ok) throw new Error(validation.errors.join("\n"));
     const abs = path.join(config.root, file.path);
-    const data = await readJson<Catalog>(abs);
+    const original = await readText(abs);
+    const data = JSON.parse(original) as Catalog;
     data.strings ??= {};
     const translations = translationsForFile(file, output);
     let injected = 0;
@@ -169,7 +172,7 @@ export const xcstringsAdapter: Adapter = {
       }
       injected += 1;
     }
-    await atomicWriteText(abs, formatXcstrings(data));
+    await atomicWriteText(abs, formatXcstrings(data, original));
     return injectSummary(file.path, injected, skipped, validation.warnings);
   },
 
@@ -286,6 +289,16 @@ async function knownRegions(file: string): Promise<string[]> {
   return [];
 }
 
-function formatXcstrings(data: Catalog): string {
-  return `${JSON.stringify(data, null, 2).replace(/("([^"\\]|\\.)*")\s*:/g, "$1 :")}\n`;
+function formatXcstrings(data: Catalog, originalContent = ""): string {
+  const json = JSON.stringify(data, null, 2);
+  if (usesSpacedColon(originalContent)) {
+    return `${json.replace(/("([^"\\]|\\.)*")\s*:/g, "$1 :")}\n`;
+  }
+  return `${json}\n`;
+}
+
+function usesSpacedColon(content: string): boolean {
+  const spaced = content.match(/"([^"\\]|\\.)*"\s+:/g)?.length ?? 0;
+  const normal = content.match(/"([^"\\]|\\.)*":/g)?.length ?? 0;
+  return spaced > normal;
 }
