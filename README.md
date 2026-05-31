@@ -24,6 +24,8 @@ agent-translator inject .agent-translator/jobs/ja --translations .agent-translat
 agent-translator validate .
 ```
 
+`inject` writes `translated` state by default. Use `--state needs_review` when you want Xcode or another localization tool to flag AI-written entries for human confirmation.
+
 For AI review of existing translations:
 
 ```bash
@@ -51,6 +53,6 @@ Bundled resources:
 agent-translator docs list
 agent-translator docs show formats/xcstrings
 agent-translator skills list
-agent-translator skills show xcstrings
+agent-translator skills show agent-translator
 agent-translator skills scaffold all --out .agent-translator/skills
 ```

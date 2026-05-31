@@ -4,6 +4,8 @@
 
 The calling agent should read `job.json`, fill `translations.json`, then run `inject` and `validate`.
 
+`inject` writes entries as `translated` by default. Use `--state needs_review` only when the resulting app or localization workflow should explicitly flag entries for human confirmation.
+
 Use extraction modes intentionally:
 
 - `--mode missing` (default): translate missing, stale, and needs_review entries.

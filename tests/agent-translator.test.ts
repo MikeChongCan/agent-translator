@@ -505,14 +505,16 @@ test("CLI inject applies multi-file review jobs without rejecting sibling file i
   }
   await write(".agent-translator/jobs/zh-Hans-review/translations.json", JSON.stringify(translations, null, 2));
 
-  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} inject ${out} --translations ${path.join(out, "translations.json")} --state translated`.quiet();
+  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} inject ${out} --translations ${path.join(out, "translations.json")}`.quiet();
 
   const infoPlist = JSON.parse(await read("ScreenKite/InfoPlist.xcstrings"));
   const localizable = JSON.parse(await read("ScreenKite/Localizable.xcstrings"));
   expect(infoPlist.strings.NSCameraUsageDescription.localizations["zh-Hans"].stringUnit.value).toBe(
     "ScreenKite 需要访问摄像头，以便录制摄像头画面叠层。"
   );
+  expect(infoPlist.strings.NSCameraUsageDescription.localizations["zh-Hans"].stringUnit.state).toBe("translated");
   expect(localizable.strings["Stop Recording"].localizations["zh-Hans"].stringUnit.value).toBe("停止录制");
+  expect(localizable.strings["Stop Recording"].localizations["zh-Hans"].stringUnit.state).toBe("translated");
 });
 
 test("xcstrings inject clears stale extraction state after target is complete", async () => {
@@ -588,7 +590,14 @@ test("CLI help includes coding-agent quickstart", async () => {
   expect(result).toContain("agent-translator discover .");
   expect(result).toContain("agent-translator extract . --target ja --review");
   expect(result).toContain("agent-translator extract . --target ja --mode all");
+  expect(result).toContain("agent-translator skills show agent-translator");
   expect(result).toContain("agent-translator init");
+});
+
+test("CLI bundles only the agent-translator skill", async () => {
+  const repo = path.resolve(import.meta.dir, "..");
+  const result = await Bun.$`bun run ${path.join(repo, "src/cli.ts")} skills list`.text();
+  expect(result.trim()).toBe("agent-translator/SKILL.md");
 });
 
 test("CLI --version matches package.json", async () => {

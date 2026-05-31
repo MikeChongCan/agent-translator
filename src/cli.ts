@@ -60,7 +60,7 @@ Guide for Codex / Claude Code / Antigravity:
     agent-translator docs list
     agent-translator docs show formats/xcstrings
     agent-translator skills list
-    agent-translator skills show xcstrings
+    agent-translator skills show agent-translator
     agent-translator skills scaffold all --out .agent-translator/skills
 `
 );
@@ -147,7 +147,7 @@ program
   .command("inject")
   .argument("<jobDir>", "Job directory")
   .requiredOption("--translations <file>", "Translations JSON file")
-  .addOption(new Option("--state <state>", "translated|needs_review").choices(["translated", "needs_review"]).default("needs_review"))
+  .addOption(new Option("--state <state>", "Injected state: translated (default) or needs_review").choices(["translated", "needs_review"]).default("translated"))
   .action(async (jobDir, options) => {
     const job = await readJob(path.resolve(jobDir));
     const config = await loadConfig(job.root);

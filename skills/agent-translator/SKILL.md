@@ -35,4 +35,6 @@ agent-translator validate .
 git diff
 ```
 
+`inject` writes `translated` state by default. Add `--state needs_review` only when the user wants the localization tool to flag entries for another review pass.
+
 Preserve placeholders exactly. For screen/video recording apps, do not translate “Recording” as audio recording unless nearby code or comments explicitly say audio, microphone, voice, or sound.
