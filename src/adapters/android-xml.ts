@@ -39,22 +39,24 @@ export const androidXmlAdapter: Adapter = {
 
   async discover(root, config) {
     const files = await globFiles(root, ["**/src/main/res/values*/strings.xml", "**/res/values*/strings.xml"]);
-    return files.map((file) => {
+    return files.flatMap((file) => {
       const lang = languageFromPathSegment(path.basename(path.dirname(file))) ?? undefined;
+      if (!lang || lang === config.sourceLanguage) return [];
       return {
         path: relativePath(root, file),
         format: "android-xml",
         sourceLanguage: config.sourceLanguage,
-        targetLanguages: lang && lang !== config.sourceLanguage ? [lang] : config.targetLanguages,
-        confidence: lang ? "high" : "medium",
-        warnings: lang ? [] : ["Could not infer Android locale from values folder."],
+        targetLanguages: [lang],
+        confidence: "high",
+        warnings: [],
       } satisfies DiscoveredFile;
     });
   },
 
   async audit(file, config) {
+    const abs = path.join(config.root, file.path);
     const source = parseAndroid(await readText(sourcePath(file, config)));
-    const target = parseAndroid(await readText(path.join(config.root, file.path)));
+    const target = existsSync(abs) ? parseAndroid(await readText(abs)) : emptyAndroid();
     const lang = file.targetLanguages[0] ?? "unknown";
     const sourceFlat = flattenAndroid(source, lang);
     const targetFlat = flattenAndroid(target, lang);
@@ -93,20 +95,34 @@ export const androidXmlAdapter: Adapter = {
     const validation = validateTranslationOutput(file, output);
     if (!validation.ok) throw new Error(validation.errors.join("\n"));
     const abs = path.join(config.root, file.path);
-    const base = existsSync(abs) ? parseAndroid(await readText(abs)) : { strings: {}, plurals: {}, arrays: {}, nonTranslatable: new Set<string>() };
     const translations = translationsForFile(file, output);
     let injected = 0;
     let skipped = 0;
-    for (const item of file.items) {
-      const value = translations.get(item.id);
-      if (value === undefined) {
-        skipped += 1;
-        continue;
+    if (existsSync(abs)) {
+      let xml = await readText(abs);
+      for (const item of file.items) {
+        const value = translations.get(item.id);
+        if (value === undefined) {
+          skipped += 1;
+          continue;
+        }
+        xml = patchFlatAndroid(xml, item.key, value);
+        injected += 1;
       }
-      setFlatAndroid(base, item.key, value);
-      injected += 1;
+      await atomicWriteText(abs, xml.endsWith("\n") ? xml : `${xml}\n`);
+    } else {
+      const base = emptyAndroid();
+      for (const item of file.items) {
+        const value = translations.get(item.id);
+        if (value === undefined) {
+          skipped += 1;
+          continue;
+        }
+        setFlatAndroid(base, item.key, value);
+        injected += 1;
+      }
+      await atomicWriteText(abs, renderAndroid(base));
     }
-    await atomicWriteText(abs, renderAndroid(base));
     return injectSummary(file.path, injected, skipped, validation.warnings);
   },
 
@@ -128,6 +144,10 @@ export const androidXmlAdapter: Adapter = {
     return { ok: errors.length === 0, file: file.path, errors, warnings };
   },
 };
+
+function emptyAndroid(): ParsedAndroid {
+  return { strings: {}, plurals: {}, arrays: {}, nonTranslatable: new Set<string>() };
+}
 
 function sourcePath(file: DiscoveredFile, config: { root: string; sourceLanguage: string }): string {
   const abs = path.join(config.root, file.path);
@@ -189,6 +209,72 @@ function setFlatAndroid(parsed: ParsedAndroid, key: string, value: string): void
   } else {
     parsed.strings[key] = value;
   }
+}
+
+function patchFlatAndroid(xml: string, key: string, value: string): string {
+  const [base, part] = key.split("/");
+  if (part && Number.isInteger(Number(part))) return patchArrayAndroid(xml, base, Number(part), value);
+  if (part) return patchPluralAndroid(xml, base, part, value);
+  return patchStringAndroid(xml, key, value);
+}
+
+function patchStringAndroid(xml: string, key: string, value: string): string {
+  const escaped = escapeXmlText(value);
+  const pattern = new RegExp(`(<string\\b(?=[^>]*\\bname=["']${escapeRegExp(key)}["'])[^>]*>)([\\s\\S]*?)(</string>)`);
+  if (pattern.test(xml)) return xml.replace(pattern, (_match, open, inner, close) => `${open}${renderPatchedAndroidText(inner, value)}${close}`);
+  return insertBeforeResourcesClose(xml, `    <string name="${key}">${escaped}</string>`);
+}
+
+function patchPluralAndroid(xml: string, key: string, quantity: string, value: string): string {
+  const escaped = escapeXmlText(value);
+  const pluralPattern = new RegExp(`(<plurals\\b(?=[^>]*\\bname=["']${escapeRegExp(key)}["'])[^>]*>)([\\s\\S]*?)(</plurals>)`);
+  const plural = xml.match(pluralPattern);
+  if (!plural) {
+    return insertBeforeResourcesClose(xml, `    <plurals name="${key}">\n        <item quantity="${quantity}">${escaped}</item>\n    </plurals>`);
+  }
+  const itemPattern = new RegExp(`(<item\\b(?=[^>]*\\bquantity=["']${escapeRegExp(quantity)}["'])[^>]*>)([\\s\\S]*?)(</item>)`);
+  const body = itemPattern.test(plural[2])
+    ? plural[2].replace(itemPattern, (_match, open, inner, close) => `${open}${renderPatchedAndroidText(inner, value)}${close}`)
+    : `${plural[2].replace(/\s*$/, "")}\n        <item quantity="${quantity}">${escaped}</item>\n    `;
+  return xml.replace(pluralPattern, (_match, open, _inner, close) => `${open}${body}${close}`);
+}
+
+function patchArrayAndroid(xml: string, key: string, index: number, value: string): string {
+  const escaped = escapeXmlText(value);
+  const arrayPattern = new RegExp(`(<string-array\\b(?=[^>]*\\bname=["']${escapeRegExp(key)}["'])[^>]*>)([\\s\\S]*?)(</string-array>)`);
+  const array = xml.match(arrayPattern);
+  if (!array) {
+    return insertBeforeResourcesClose(xml, `    <string-array name="${key}">\n        <item>${escaped}</item>\n    </string-array>`);
+  }
+  let seen = -1;
+  let replaced = false;
+  const body = array[2].replace(/(<item\b[^>]*>)([\s\S]*?)(<\/item>)/g, (match, open, _inner, close) => {
+    seen += 1;
+    if (seen !== index) return match;
+    replaced = true;
+    return `${open}${renderPatchedAndroidText(_inner, value)}${close}`;
+  });
+  const nextBody = replaced ? body : `${body.replace(/\s*$/, "")}\n        <item>${escaped}</item>\n    `;
+  return xml.replace(arrayPattern, (_match, open, _inner, close) => `${open}${nextBody}${close}`);
+}
+
+function insertBeforeResourcesClose(xml: string, line: string): string {
+  if (/<resources\b([^>]*)\/>\s*$/.test(xml)) {
+    return xml.replace(/<resources\b([^>]*)\/>\s*$/, (_match, attrs) => `<resources${attrs}>\n${line}\n</resources>\n`);
+  }
+  if (/<\/resources>\s*$/.test(xml)) {
+    return xml.replace(/\s*<\/resources>\s*$/, () => `\n${line}\n</resources>\n`);
+  }
+  return `${xml.trimEnd()}\n${line}\n`;
+}
+
+function renderPatchedAndroidText(existingInner: string, value: string): string {
+  if (/<!\[CDATA\[[\s\S]*?\]\]>/.test(existingInner.trim())) return `<![CDATA[${value}]]>`;
+  return escapeXmlText(value);
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function renderAndroid(parsed: ParsedAndroid): string {

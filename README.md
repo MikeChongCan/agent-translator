@@ -20,6 +20,8 @@ agent-translator inject .agent-translator/jobs/ja --translations .agent-translat
 agent-translator validate .
 ```
 
+`agent-translator init` creates `agent-translator.config.json` only when needed. It will not overwrite an existing manifest unless you pass `--force`.
+
 Supported targets:
 
 - Xcode `.xcstrings`

@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 import YAML from "yaml";
 import type { Adapter, DiscoveredFile } from "../types";
 import { forbiddenTermsFor } from "../utils/config";
@@ -19,22 +20,24 @@ export const railsYamlAdapter: Adapter = {
 
   async discover(root, config) {
     const files = await globFiles(root, ["config/locales/**/*.yml", "config/locales/**/*.yaml"]);
-    return files.map((file) => {
-      const lang = path.basename(file).split(".")[0];
+    return files.flatMap((file) => {
+      const lang = languageFromRailsYamlPath(file);
+      if (!lang || lang === config.sourceLanguage) return [];
       return {
         path: relativePath(root, file),
         format: "rails-yaml",
         sourceLanguage: config.sourceLanguage,
-        targetLanguages: lang !== config.sourceLanguage ? [lang] : config.targetLanguages,
-        confidence: lang ? "high" : "medium",
-        warnings: lang ? [] : ["Could not infer Rails locale from filename."],
+        targetLanguages: [lang],
+        confidence: "high",
+        warnings: [],
       } satisfies DiscoveredFile;
     });
   },
 
   async audit(file, config) {
     const source = await sourceYaml(file, config);
-    const target = YAML.parse(await readText(path.join(config.root, file.path))) as Record<string, unknown>;
+    const targetPath = path.join(config.root, file.path);
+    const target = existsSync(targetPath) ? (YAML.parse(await readText(targetPath)) as Record<string, unknown>) : {};
     const lang = file.targetLanguages[0] ?? "unknown";
     const sourceFlat = flattenLocale(source, config.sourceLanguage);
     const targetFlat = flattenLocale(target, lang);
@@ -49,7 +52,8 @@ export const railsYamlAdapter: Adapter = {
   async extract(file, config, options) {
     const abs = path.join(config.root, file.path);
     const source = flattenLocale(await sourceYaml(file, config), config.sourceLanguage);
-    const target = flattenLocale(YAML.parse(await readText(abs)) as Record<string, unknown>, options.targetLanguage);
+    const targetDoc = existsSync(abs) ? (YAML.parse(await readText(abs)) as Record<string, unknown>) : {};
+    const target = flattenLocale(targetDoc, options.targetLanguage);
     const items = Object.entries(source)
       .map(([key, value]) => ({ key, source: value, existing: target[key], state: target[key] ? "translated" : "missing" }) as const)
       .filter((entry) => shouldExtract(entry.state, options))
@@ -73,9 +77,9 @@ export const railsYamlAdapter: Adapter = {
     const validation = validateTranslationOutput(file, output);
     if (!validation.ok) throw new Error(validation.errors.join("\n"));
     const abs = path.join(config.root, file.path);
-    const data = (YAML.parse(await readText(abs)) ?? {}) as Record<string, unknown>;
+    const doc = YAML.parseDocument(existsSync(abs) ? await readText(abs) : "{}\n");
     const lang = output.targetLanguage;
-    data[lang] ??= {};
+    if (!doc.has(lang)) doc.set(lang, doc.createNode({}));
     const translations = translationsForFile(file, output);
     let injected = 0;
     let skipped = 0;
@@ -85,10 +89,10 @@ export const railsYamlAdapter: Adapter = {
         skipped += 1;
         continue;
       }
-      setNested(data[lang] as Record<string, unknown>, item.key.split("."), value);
+      doc.setIn([lang, ...item.key.split(".")], value);
       injected += 1;
     }
-    await atomicWriteText(abs, YAML.stringify(data));
+    await atomicWriteText(abs, doc.toString());
     return injectSummary(file.path, injected, skipped, validation.warnings);
   },
 
@@ -113,9 +117,22 @@ export const railsYamlAdapter: Adapter = {
 };
 
 async function sourceYaml(file: DiscoveredFile, config: { root: string; sourceLanguage: string }): Promise<Record<string, unknown>> {
-  const dir = path.dirname(path.join(config.root, file.path));
-  const ext = path.extname(file.path);
-  return YAML.parse(await readText(path.join(dir, `${config.sourceLanguage}${ext}`))) as Record<string, unknown>;
+  return YAML.parse(await readText(sourceYamlPath(file.path, config))) as Record<string, unknown>;
+}
+
+function sourceYamlPath(filePath: string, config: { root: string; sourceLanguage: string }): string {
+  const abs = path.join(config.root, filePath);
+  const ext = path.extname(abs);
+  const stem = path.basename(abs, ext);
+  const parts = stem.split(".");
+  parts[parts.length - 1] = config.sourceLanguage;
+  return path.join(path.dirname(abs), `${parts.join(".")}${ext}`);
+}
+
+function languageFromRailsYamlPath(filePath: string): string | null {
+  const ext = path.extname(filePath);
+  const stem = path.basename(filePath, ext);
+  return stem.split(".").at(-1) ?? null;
 }
 
 function flattenLocale(data: Record<string, unknown>, lang: string): Record<string, string> {
@@ -130,13 +147,4 @@ function flatten(value: unknown, parts: string[], out: Record<string, string>): 
   else if (value && typeof value === "object" && !Array.isArray(value)) {
     for (const [key, child] of Object.entries(value)) flatten(child, [...parts, key], out);
   }
-}
-
-function setNested(root: Record<string, unknown>, parts: string[], value: string): void {
-  let current = root;
-  for (const part of parts.slice(0, -1)) {
-    current[part] ??= {};
-    current = current[part] as Record<string, unknown>;
-  }
-  current[parts.at(-1) ?? ""] = value;
 }

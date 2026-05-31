@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 import { Command, Option } from "commander";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { writeFile } from "node:fs/promises";
 import { stat } from "node:fs/promises";
@@ -15,6 +16,36 @@ program
   .name("agent-translator")
   .description("Local-first localization CLI for coding-agent translation workflows.")
   .version("0.1.0");
+
+program.addHelpText(
+  "after",
+  `
+
+Guide for Codex / Claude Code / Antigravity:
+  This CLI does not call agents. Your coding agent calls this CLI.
+  Convention over configuration is the default. Start without config:
+
+    agent-translator discover .
+    agent-translator audit .
+    agent-translator extract . --target ja --out .agent-translator/jobs/ja
+    agent-translator prompt .agent-translator/jobs/ja
+    # Fill .agent-translator/jobs/ja/translations.json
+    agent-translator inject .agent-translator/jobs/ja --translations .agent-translator/jobs/ja/translations.json
+    agent-translator validate .
+
+  If discovery is ambiguous, initialize a manifest only then:
+
+    agent-translator init
+
+  Bundled guidance:
+
+    agent-translator docs list
+    agent-translator docs show formats/xcstrings
+    agent-translator skills list
+    agent-translator skills show xcstrings
+    agent-translator skills scaffold all --out .agent-translator/skills
+`
+);
 
 program
   .command("discover")
@@ -63,7 +94,7 @@ program
   .action(async (input, options) => {
     const context = await commandContext(input);
     const config = await loadConfig(context.root);
-    const files = await discoverForInput(context.input, config);
+    const files = await discoverForInput(context.input, config, options.target);
     const out = path.resolve(options.out ?? `.agent-translator/jobs/${new Date().toISOString().replace(/[:.]/g, "-")}-${options.target}`);
     const job = await createJob(files, config, { targetLanguage: options.target, mode: options.mode });
     await writeJob(out, job);
@@ -126,8 +157,11 @@ program
     if (results.some((result) => !result.ok)) process.exitCode = 1;
   });
 
-program.command("init").action(async () => {
+program.command("init").option("--force", "Overwrite an existing config").action(async (options) => {
   const file = path.resolve("agent-translator.config.json");
+  if (existsSync(file) && !options.force) {
+    throw new Error(`${file} already exists. Re-run with --force to overwrite it.`);
+  }
   await writeFile(
     file,
     `${JSON.stringify({ sourceLanguage: "en", targetLanguages: [], files: [] }, null, 2)}\n`,
@@ -156,10 +190,15 @@ program.command("diff").argument("[path]", "Path", ".").action(() => {
   console.log("Use git diff to review injected localization changes.");
 });
 
-program.parse();
-
 if (process.argv.length <= 2) {
   program.outputHelp();
+} else {
+  try {
+    await program.parseAsync(process.argv);
+  } catch (error) {
+    console.error(`error: ${error instanceof Error ? error.message : String(error)}`);
+    process.exitCode = 1;
+  }
 }
 
 async function commandContext(input: string): Promise<{ root: string; input: string }> {

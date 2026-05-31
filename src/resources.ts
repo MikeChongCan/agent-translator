@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 import { cp, readdir, readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 export type ResourceKind = "docs" | "skills";
 
 export function packageRoot(): string {
-  return path.resolve(new URL("..", import.meta.url).pathname);
+  return path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 }
 
 export async function listResources(kind: ResourceKind): Promise<string[]> {

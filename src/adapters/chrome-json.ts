@@ -1,4 +1,5 @@
 import path from "node:path";
+import { existsSync } from "node:fs";
 import type { Adapter, DiscoveredFile } from "../types";
 import { forbiddenTermsFor } from "../utils/config";
 import { atomicWriteText, readJson, readText, relativePath } from "../utils/fs";
@@ -27,22 +28,24 @@ export const chromeJsonAdapter: Adapter = {
 
   async discover(root, config) {
     const files = await globFiles(root, ["**/_locales/*/messages.json"]);
-    return files.map((file) => {
+    return files.flatMap((file) => {
       const lang = languageFromPathSegment(path.basename(path.dirname(file))) ?? undefined;
+      if (!lang || lang === config.sourceLanguage) return [];
       return {
         path: relativePath(root, file),
         format: "chrome-json",
         sourceLanguage: config.sourceLanguage,
-        targetLanguages: lang && lang !== config.sourceLanguage ? [lang] : config.targetLanguages,
-        confidence: lang ? "high" : "medium",
-        warnings: lang ? [] : ["Could not infer Chrome locale from _locales path."],
+        targetLanguages: [lang],
+        confidence: "high",
+        warnings: [],
       } satisfies DiscoveredFile;
     });
   },
 
   async audit(file, config) {
     const source = await sourceChrome(file, config);
-    const target = await readJson<ChromeFile>(path.join(config.root, file.path));
+    const targetPath = path.join(config.root, file.path);
+    const target = existsSync(targetPath) ? await readJson<ChromeFile>(targetPath) : {};
     const lang = file.targetLanguages[0] ?? "unknown";
     const audit = newLanguageAudit();
     for (const key of Object.keys(source)) {
@@ -62,7 +65,7 @@ export const chromeJsonAdapter: Adapter = {
   async extract(file, config, options) {
     const abs = path.join(config.root, file.path);
     const source = await sourceChrome(file, config);
-    const target = await readJson<ChromeFile>(abs);
+    const target = existsSync(abs) ? await readJson<ChromeFile>(abs) : {};
     const items = Object.entries(source)
       .map(([key, message]) => {
         const existing = target[key]?.message;
@@ -96,7 +99,7 @@ export const chromeJsonAdapter: Adapter = {
     const validation = validateTranslationOutput(file, output);
     if (!validation.ok) throw new Error(validation.errors.join("\n"));
     const abs = path.join(config.root, file.path);
-    const target = await readJson<ChromeFile>(abs);
+    const target = existsSync(abs) ? await readJson<ChromeFile>(abs) : seedChrome(await sourceChrome(file, config));
     const translations = translationsForFile(file, output);
     let injected = 0;
     let skipped = 0;
@@ -137,9 +140,21 @@ export const chromeJsonAdapter: Adapter = {
   },
 };
 
-async function sourceChrome(file: DiscoveredFile, config: { root: string; sourceLanguage: string }): Promise<ChromeFile> {
+async function sourceChrome(file: { path: string }, config: { root: string; sourceLanguage: string }): Promise<ChromeFile> {
   const target = path.join(config.root, file.path);
   const localeDir = path.dirname(target);
   const source = path.join(path.dirname(localeDir), config.sourceLanguage, "messages.json");
   return readJson<ChromeFile>(source);
+}
+
+function seedChrome(source: ChromeFile): ChromeFile {
+  return Object.fromEntries(
+    Object.entries(source).map(([key, value]) => [
+      key,
+      {
+        ...value,
+        message: "",
+      },
+    ])
+  );
 }

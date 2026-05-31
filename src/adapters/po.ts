@@ -1,4 +1,5 @@
 import gettextParser from "gettext-parser";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import type {
   Adapter,
@@ -13,6 +14,7 @@ import type {
 import { forbiddenTermsFor } from "../utils/config";
 import { atomicWriteText, readText, relativePath } from "../utils/fs";
 import { comparePlaceholders, extractPlaceholders } from "../utils/placeholders";
+import { pluralCategories } from "../utils/plurals";
 import {
   globFiles,
   injectSummary,
@@ -47,25 +49,28 @@ export const poAdapter: Adapter = {
 
   async discover(root, config) {
     const files = await globFiles(root, ["**/*.po"]);
-    return files.map((file) => {
+    return files.flatMap((file) => {
       const lang = languageFromPoPath(file);
+      if (!lang || lang === config.sourceLanguage) return [];
       return {
         path: relativePath(root, file),
         format: "po",
         sourceLanguage: config.sourceLanguage,
-        targetLanguages: lang && lang !== config.sourceLanguage ? [lang] : config.targetLanguages,
-        confidence: lang ? "high" : "medium",
-        warnings: lang ? [] : ["Could not infer PO language from path; pass --target or configure targetLanguages."],
+        targetLanguages: [lang],
+        confidence: "high",
+        warnings: [],
       } satisfies DiscoveredFile;
     });
   },
 
   async audit(file, config) {
-    const data = parsePo(await readText(path.join(config.root, file.path)));
+    const abs = path.join(config.root, file.path);
     const lang = file.targetLanguages[0] ?? config.targetLanguages[0] ?? "unknown";
+    const targetExists = existsSync(abs);
+    const data = targetExists ? parsePo(await readText(abs)) : await sourcePo(file, config);
     const audit = newLanguageAudit();
     for (const entry of entries(data)) {
-      const state = poState(entry);
+      const state = targetExists ? poState(entry) : "missing";
       if (state === "translated") audit.translated += 1;
       else if (state === "needs_review") audit.needsReview += 1;
       else audit.missing += 1;
@@ -75,16 +80,22 @@ export const poAdapter: Adapter = {
       total: entries(data).length,
       translatable: entries(data).length,
       byLanguage: { [lang]: audit },
-      warnings: [...file.warnings],
+      warnings: targetExists ? [...file.warnings] : [...file.warnings, `Target file does not exist: ${file.path}`],
     };
   },
 
   async extract(file, config, options) {
     const abs = path.join(config.root, file.path);
-    const data = parsePo(await readText(abs));
-    const items = entries(data)
-      .filter((entry) => shouldExtract(poState(entry), options))
-      .flatMap((entry) => poItems(entry).map((poItem) =>
+    const targetExists = existsSync(abs);
+    const data = targetExists ? parsePo(await readText(abs)) : seedTargetPo(await sourcePo(file, config), options.targetLanguage);
+    const items = entries(data).flatMap((entry) =>
+      poItems(entry)
+        .map((poItem) => {
+          const state = poSlotState(entry, poItem.existing, targetExists);
+          return { poItem, state };
+        })
+        .filter(({ state }) => shouldExtract(state, options))
+        .map(({ poItem, state }) =>
           makeItem({
             root: config.root,
             file: abs,
@@ -92,23 +103,31 @@ export const poAdapter: Adapter = {
             key: poKey(entry, poItem.idx),
             source: poItem.source,
             targetLanguage: options.targetLanguage,
-            state: poItem.existing ? poState(entry) : "missing",
+            state,
             comment: poComment(entry),
-            existingTarget: poItem.existing ?? null,
+            existingTarget: targetExists ? (poItem.existing ?? null) : null,
             forbiddenTerms: forbiddenTermsFor(config, options.targetLanguage, entry.msgid ?? ""),
             meta: { msgid: entry.msgid, msgctxt: entry.msgctxt, plural: entry.msgid_plural, idx: poItem.idx },
           })
         )
-      );
-    return { path: file.path, format: "po", items, warnings: [...file.warnings] };
+    );
+    return {
+      path: file.path,
+      format: "po",
+      items,
+      warnings: targetExists ? [...file.warnings] : [...file.warnings, `Target file does not exist: ${file.path}`],
+    };
   },
 
   async inject(file, output, config, _state: InjectState) {
     const validation = validateTranslationOutput(file, output);
     if (!validation.ok) throw new Error(validation.errors.join("\n"));
     const abs = path.join(config.root, file.path);
-    const data = parsePo(await readText(abs));
+    const data = existsSync(abs)
+      ? parsePo(await readText(abs))
+      : seedTargetPo(await sourcePo(file, config), output.targetLanguage);
     const translations = translationsForFile(file, output);
+    const touched = new Set<PoMessage>();
     let injected = 0;
     let skipped = 0;
     for (const item of file.items) {
@@ -126,8 +145,10 @@ export const poAdapter: Adapter = {
       message.msgstr ??= [];
       while (message.msgstr.length <= idx) message.msgstr.push("");
       message.msgstr[idx] = value;
+      touched.add(message);
       injected += 1;
     }
+    for (const message of touched) applyPoReviewState(message, _state);
     data.headers ??= {};
     data.headers.Language = output.targetLanguage;
     data.charset = "utf-8";
@@ -149,11 +170,12 @@ export const poAdapter: Adapter = {
       return { ok: false, file: file.path, errors: [String(error)], warnings };
     }
     for (const entry of entries(data)) {
-      const source = sourceFor(entry);
-      const target = entry.msgstr?.[0] ?? "";
-      if (!target) continue;
-      for (const problem of comparePlaceholders(extractPlaceholders(source), target)) {
-        errors.push(`${poKey(entry)}: ${problem}`);
+      for (const poItem of poItems(entry)) {
+        const target = entry.msgstr?.[poItem.idx] ?? "";
+        if (!target) continue;
+        for (const problem of comparePlaceholders(extractPlaceholders(poItem.source), target)) {
+          errors.push(`${poKey(entry, poItem.idx)}: ${problem}`);
+        }
       }
     }
     return { ok: errors.length === 0, file: file.path, errors, warnings };
@@ -162,6 +184,66 @@ export const poAdapter: Adapter = {
 
 function parsePo(content: string): PoData {
   return gettextParser.po.parse(Buffer.from(content)) as unknown as PoData;
+}
+
+async function sourcePo(file: { path: string }, config: ResolvedConfig): Promise<PoData> {
+  for (const candidate of sourcePoPaths(file, config)) {
+    if (existsSync(candidate)) return parsePo(await readText(candidate));
+  }
+  return emptyPo(config.sourceLanguage);
+}
+
+function sourcePoPaths(file: { path: string }, config: ResolvedConfig): string[] {
+  const abs = path.join(config.root, file.path);
+  const parts = abs.split(path.sep);
+  const lc = parts.findIndex((part) => part === "LC_MESSAGES");
+  const candidates: string[] = [];
+  if (lc > 0) {
+    const next = [...parts];
+    next[lc - 1] = config.sourceLanguage;
+    candidates.push(next.join(path.sep));
+  }
+  const base = path.basename(abs, ".po");
+  if (/^[a-z]{2,3}([_-][A-Za-z0-9]+)*$/.test(base)) {
+    candidates.push(path.join(path.dirname(abs), `${config.sourceLanguage}.po`));
+    candidates.push(path.join(path.dirname(abs), `${config.sourceLanguage}.pot`));
+  }
+  const parent = path.basename(path.dirname(abs));
+  if (/^[a-z]{2,3}([_-][A-Za-z0-9]+)*$/.test(parent)) {
+    candidates.push(path.join(path.dirname(path.dirname(abs)), config.sourceLanguage, path.basename(abs)));
+    candidates.push(path.join(path.dirname(path.dirname(abs)), `${path.basename(abs, ".po")}.pot`));
+  }
+  return [...new Set(candidates)];
+}
+
+function emptyPo(language: string): PoData {
+  return {
+    charset: "utf-8",
+    headers: {
+      Language: language,
+      "Content-Type": "text/plain; charset=UTF-8",
+    },
+    translations: {},
+  };
+}
+
+function seedTargetPo(source: PoData, targetLanguage: string): PoData {
+  const seeded = emptyPo(targetLanguage);
+  seeded.headers = { ...(source.headers ?? {}), Language: targetLanguage, "Content-Type": "text/plain; charset=UTF-8" };
+  for (const [context, messages] of Object.entries(source.translations ?? {})) {
+    seeded.translations[context] = {};
+    for (const [msgid, message] of Object.entries(messages)) {
+      if (!msgid) continue;
+      const count = message.msgid_plural ? Math.max(2, pluralCategories(targetLanguage).length, message.msgstr?.length ?? 0) : 1;
+      const comments = stripFuzzyFlag(message.comments);
+      seeded.translations[context][msgid] = {
+        ...message,
+        comments,
+        msgstr: Array.from({ length: count }, () => ""),
+      };
+    }
+  }
+  return seeded;
 }
 
 function entries(data: PoData): PoMessage[] {
@@ -181,8 +263,29 @@ function poState(entry: PoMessage): "missing" | "needs_review" | "translated" {
   return "translated";
 }
 
-function sourceFor(entry: PoMessage): string {
-  return entry.msgid ?? "";
+function poSlotState(entry: PoMessage, existing: string | undefined, targetExists: boolean): "missing" | "needs_review" | "translated" {
+  if (!targetExists || !existing) return "missing";
+  if (poState(entry) === "needs_review") return "needs_review";
+  return "translated";
+}
+
+function applyPoReviewState(entry: PoMessage, state: InjectState): void {
+  const flags = new Set((entry.comments?.flag ?? "").split(",").map((item) => item.trim()).filter(Boolean));
+  const incomplete = entry.msgstr?.some((value) => !value) ?? true;
+  if (state === "needs_review" || incomplete) flags.add("fuzzy");
+  else flags.delete("fuzzy");
+  entry.comments ??= {};
+  if (flags.size > 0) entry.comments.flag = [...flags].join(", ");
+  else delete entry.comments.flag;
+}
+
+function stripFuzzyFlag(comments: PoMessage["comments"]): PoMessage["comments"] {
+  if (!comments?.flag) return comments ? { ...comments } : undefined;
+  const flags = comments.flag.split(",").map((item) => item.trim()).filter((item) => item && item !== "fuzzy");
+  const next = { ...comments };
+  if (flags.length > 0) next.flag = flags.join(", ");
+  else delete next.flag;
+  return next;
 }
 
 function poItems(entry: PoMessage): Array<{ idx: number; source: string; existing?: string }> {

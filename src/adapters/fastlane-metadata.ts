@@ -43,16 +43,19 @@ export const fastlaneMetadataAdapter: Adapter = {
       const metadata = parts.lastIndexOf("metadata");
       if (metadata < 0 || !parts[metadata + 1]) continue;
       const lang = parts[metadata + 1] === "android" ? parts[metadata + 2] : parts[metadata + 1];
-      if (lang) dirs.set(path.dirname(file), lang);
+      if (lang) dirs.set(parts.slice(0, (parts[metadata + 1] === "android" ? metadata + 2 : metadata + 1) + 1).join(path.sep), lang);
     }
-    return [...dirs.entries()].map(([dir, lang]) => ({
-      path: relativePath(root, dir),
-      format: "fastlane-metadata",
-      sourceLanguage: config.sourceLanguage,
-      targetLanguages: lang !== config.sourceLanguage ? [lang] : config.targetLanguages,
-      confidence: languageFromPathSegment(lang) ? "high" : "medium",
-      warnings: languageFromPathSegment(lang) ? [] : ["Could not infer Fastlane metadata locale."],
-    })) satisfies DiscoveredFile[];
+    return [...dirs.entries()].flatMap(([dir, lang]) => {
+      if (!languageFromPathSegment(lang) || isSourceMetadataLanguage(lang, config.sourceLanguage)) return [];
+      return [{
+        path: relativePath(root, dir),
+        format: "fastlane-metadata",
+        sourceLanguage: config.sourceLanguage,
+        targetLanguages: [lang],
+        confidence: "high",
+        warnings: [],
+      } satisfies DiscoveredFile];
+    });
   },
 
   async audit(file, config) {
@@ -115,11 +118,16 @@ export const fastlaneMetadataAdapter: Adapter = {
   async validate(file, config) {
     const errors: string[] = [];
     const warnings = [...file.warnings];
-    for (const rel of await globFiles(path.join(config.root, file.path), FILES)) {
-      const base = path.basename(rel);
-      const value = await readText(rel);
-      if (LIMITS[base] && value.trim().length > LIMITS[base]) errors.push(`${relativePath(config.root, rel)} exceeds ${LIMITS[base]} chars`);
-      for (const problem of comparePlaceholders(extractPlaceholders(value), value)) errors.push(`${relativePath(config.root, rel)}: ${problem}`);
+    const targetDir = path.join(config.root, file.path);
+    const source = await sourceFiles(file, config);
+    for (const found of await globFiles(targetDir, FILES)) {
+      const base = path.basename(found);
+      const rel = relativePath(targetDir, found);
+      const value = await readText(found);
+      if (LIMITS[base] && value.trim().length > LIMITS[base]) errors.push(`${relativePath(config.root, found)} exceeds ${LIMITS[base]} chars`);
+      const sourceValue = source[rel];
+      if (!sourceValue) continue;
+      for (const problem of comparePlaceholders(extractPlaceholders(sourceValue), value)) errors.push(`${relativePath(config.root, found)}: ${problem}`);
     }
     return { ok: errors.length === 0, file: file.path, errors, warnings };
   },
@@ -127,10 +135,23 @@ export const fastlaneMetadataAdapter: Adapter = {
 
 async function sourceFiles(file: DiscoveredFile, config: { root: string; sourceLanguage: string }): Promise<Record<string, string>> {
   const dir = path.join(config.root, file.path);
-  const sourceDir = dir.replace(new RegExp(`${path.basename(dir)}$`), config.sourceLanguage);
   const out: Record<string, string> = {};
-  for (const found of await globFiles(sourceDir, FILES)) {
-    out[relativePath(sourceDir, found)] = await readText(found);
+  for (const sourceDir of sourceMetadataDirs(dir, config.sourceLanguage)) {
+    for (const found of await globFiles(sourceDir, FILES)) {
+      out[relativePath(sourceDir, found)] = await readText(found);
+    }
+    if (Object.keys(out).length > 0) break;
   }
   return out;
+}
+
+function sourceMetadataDirs(targetDir: string, sourceLanguage: string): string[] {
+  const parent = path.dirname(targetDir);
+  const preferred = path.join(parent, sourceLanguage);
+  const fallbacks = sourceLanguage === "en" ? [path.join(parent, "en-US"), path.join(parent, "en-GB")] : [];
+  return [preferred, ...fallbacks];
+}
+
+function isSourceMetadataLanguage(language: string, sourceLanguage: string): boolean {
+  return language === sourceLanguage || (sourceLanguage === "en" && ["en-US", "en-GB"].includes(language));
 }

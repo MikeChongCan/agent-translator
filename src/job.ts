@@ -3,13 +3,15 @@ import type { ExtractOptions, TranslationJob, TranslationOutput } from "./types"
 import { adapterForFormat, adapterForPath, adapters } from "./adapters/registry";
 import { ensureDir, readJson, writeJson } from "./utils/fs";
 import type { ResolvedConfig, DiscoveredFile } from "./types";
+import { globFiles } from "./adapters/common";
+import { androidFolderForLanguage } from "./utils/language";
 
 export async function discoverFiles(root: string, config: ResolvedConfig): Promise<DiscoveredFile[]> {
   const results = await Promise.all(adapters.map((adapter) => adapter.discover(root, config)));
-  return results.flat().sort((a, b) => a.path.localeCompare(b.path));
+  return mergeDiscovered(results.flat(), await inferTargetFiles(root, config, config.targetLanguages));
 }
 
-export async function discoverForInput(input: string, config: ResolvedConfig): Promise<DiscoveredFile[]> {
+export async function discoverForInput(input: string, config: ResolvedConfig, targetLanguage?: string): Promise<DiscoveredFile[]> {
   const abs = path.resolve(config.root, input);
   const adapter = adapterForPath(abs);
   if (adapter) {
@@ -28,7 +30,11 @@ export async function discoverForInput(input: string, config: ResolvedConfig): P
       },
     ];
   }
-  return discoverFiles(abs, { ...config, root: abs });
+  const root = input === "." ? config.root : abs;
+  const nextConfig = { ...config, root };
+  const results = await Promise.all(adapters.map((candidate) => candidate.discover(root, nextConfig)));
+  const targets = targetLanguage ? [targetLanguage] : nextConfig.targetLanguages;
+  return mergeDiscovered(results.flat(), await inferTargetFiles(root, nextConfig, targets));
 }
 
 export async function createJob(files: DiscoveredFile[], config: ResolvedConfig, options: ExtractOptions): Promise<TranslationJob> {
@@ -58,6 +64,115 @@ export async function createJob(files: DiscoveredFile[], config: ResolvedConfig,
 function matchesTarget(file: { format: string; targetLanguages: string[] }, target: string): boolean {
   if (file.format === "xcstrings") return true;
   return file.targetLanguages.length === 0 || file.targetLanguages.includes(target);
+}
+
+function mergeDiscovered(files: DiscoveredFile[], inferred: DiscoveredFile[]): DiscoveredFile[] {
+  const byKey = new Map<string, DiscoveredFile>();
+  for (const file of [...files, ...inferred]) {
+    const key = `${file.format}:${file.path}:${file.targetLanguages.join(",")}`;
+    if (!byKey.has(key)) byKey.set(key, file);
+  }
+  return [...byKey.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
+async function inferTargetFiles(root: string, config: ResolvedConfig, targets: string[]): Promise<DiscoveredFile[]> {
+  if (targets.length === 0) return [];
+  const inferred: DiscoveredFile[] = [];
+  for (const target of targets.filter((lang) => lang && lang !== config.sourceLanguage)) {
+    inferred.push(...(await inferPoTargets(root, config.sourceLanguage, target)));
+    inferred.push(...(await inferChromeTargets(root, config.sourceLanguage, target)));
+    inferred.push(...(await inferAndroidTargets(root, config.sourceLanguage, target)));
+    inferred.push(...(await inferRailsTargets(root, config.sourceLanguage, target)));
+    inferred.push(...(await inferFastlaneTargets(root, config.sourceLanguage, target)));
+  }
+  return inferred;
+}
+
+async function inferPoTargets(root: string, sourceLanguage: string, targetLanguage: string): Promise<DiscoveredFile[]> {
+  const files = await globFiles(root, ["**/*.po", "**/*.pot"]);
+  return files.flatMap((file) => {
+    const rel = path.relative(root, file).split(path.sep).join("/");
+    const ext = path.extname(rel);
+    const parts = rel.split("/");
+    const lc = parts.findIndex((part) => part === "LC_MESSAGES");
+    if (lc > 0 && parts[lc - 1] === sourceLanguage) {
+      parts[lc - 1] = targetLanguage;
+      parts[parts.length - 1] = parts[parts.length - 1].replace(/\.pot$/, ".po");
+      return inferred(parts.join("/"), "po", sourceLanguage, targetLanguage);
+    }
+    const base = path.basename(rel, ".po");
+    if (base === sourceLanguage) return inferred(path.join(path.dirname(rel), `${targetLanguage}.po`), "po", sourceLanguage, targetLanguage);
+    const parent = path.basename(path.dirname(rel));
+    if (parent === sourceLanguage) {
+      return inferred(
+        path.join(path.dirname(path.dirname(rel)), targetLanguage, path.basename(rel).replace(/\.pot$/, ".po")),
+        "po",
+        sourceLanguage,
+        targetLanguage
+      );
+    }
+    if (ext === ".pot") return inferred(path.join(path.dirname(rel), targetLanguage, `${path.basename(rel, ".pot")}.po`), "po", sourceLanguage, targetLanguage);
+    return [];
+  });
+}
+
+async function inferChromeTargets(root: string, sourceLanguage: string, targetLanguage: string): Promise<DiscoveredFile[]> {
+  const files = await globFiles(root, [`**/_locales/${sourceLanguage}/messages.json`]);
+  return files.map((file) => inferred(path.relative(root, path.join(path.dirname(path.dirname(file)), targetLanguage, "messages.json")), "chrome-json", sourceLanguage, targetLanguage));
+}
+
+async function inferAndroidTargets(root: string, sourceLanguage: string, targetLanguage: string): Promise<DiscoveredFile[]> {
+  const sourceFolder = sourceLanguage === "en" ? "values" : androidFolderForLanguage(sourceLanguage);
+  const targetFolder = androidFolderForLanguage(targetLanguage);
+  const files = await globFiles(root, [`**/res/${sourceFolder}/strings.xml`]);
+  return files.map((file) =>
+    inferred(path.relative(root, path.join(path.dirname(path.dirname(file)), targetFolder, "strings.xml")), "android-xml", sourceLanguage, targetLanguage)
+  );
+}
+
+async function inferRailsTargets(root: string, sourceLanguage: string, targetLanguage: string): Promise<DiscoveredFile[]> {
+  const files = await globFiles(root, ["config/locales/**/*.yml", "config/locales/**/*.yaml"]);
+  return files.flatMap((file) => {
+    const rel = path.relative(root, file);
+    const ext = path.extname(rel);
+    const stem = path.basename(rel, ext);
+    const parts = stem.split(".");
+    if (parts.at(-1) !== sourceLanguage) return [];
+    parts[parts.length - 1] = targetLanguage;
+    return inferred(path.join(path.dirname(rel), `${parts.join(".")}${ext}`), "rails-yaml", sourceLanguage, targetLanguage);
+  });
+}
+
+async function inferFastlaneTargets(root: string, sourceLanguage: string, targetLanguage: string): Promise<DiscoveredFile[]> {
+  const files = await globFiles(root, ["fastlane/metadata/**/*", "**/fastlane/metadata/**/*"]);
+  const dirs = new Set<string>();
+  const sourceCandidates = new Set(sourceLanguage === "en" ? ["en", "en-US", "en-GB"] : [sourceLanguage]);
+  for (const file of files) {
+    const parts = file.split(path.sep);
+    const metadata = parts.lastIndexOf("metadata");
+    if (metadata < 0) continue;
+    const langIndex = parts[metadata + 1] === "android" ? metadata + 2 : metadata + 1;
+    if (!sourceCandidates.has(parts[langIndex])) continue;
+    parts[langIndex] = targetLanguage;
+    dirs.add(path.relative(root, parts.slice(0, langIndex + 1).join(path.sep)));
+  }
+  return [...dirs].map((dir) => inferred(dir, "fastlane-metadata", sourceLanguage, targetLanguage));
+}
+
+function inferred(
+  filePath: string,
+  format: DiscoveredFile["format"],
+  sourceLanguage: string,
+  targetLanguage: string
+): DiscoveredFile {
+  return {
+    path: filePath.split(path.sep).join("/"),
+    format,
+    sourceLanguage,
+    targetLanguages: [targetLanguage],
+    confidence: "medium",
+    warnings: [`Target ${targetLanguage} inferred from source ${sourceLanguage}; file may not exist yet.`],
+  };
 }
 
 export async function writeJob(outDir: string, job: TranslationJob): Promise<void> {
@@ -108,7 +223,7 @@ ${glossary.length > 0 ? `Forbidden terms in this job: ${[...new Set(glossary)].j
 Workflow:
 1. Read job.json.
 2. Translate entries into translations.json.
-3. Run agent-translator inject ${path.basename(job.root)} --translations translations.json from the job directory, or let the caller run inject.
+3. Run agent-translator inject <job-dir> --translations <job-dir>/translations.json, or use npx/bunx agent-translator when the binary is not already on PATH.
 4. Run agent-translator validate on changed files.
 `;
 }

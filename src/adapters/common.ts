@@ -31,7 +31,8 @@ export function emptyAudit(file: DiscoveredFile, warnings: string[] = []): Audit
 }
 
 export function shouldExtract(state: string, options: ExtractOptions): boolean {
-  if (options.mode === "all" || options.mode === "review") return true;
+  if (options.mode === "all") return true;
+  if (options.mode === "review") return state === "translated" || state === "needs_review";
   if (options.mode === "stale") return state === "stale";
   if (options.mode === "needs-review") return state === "needs_review";
   return state === "missing" || state === "new" || state === "stale" || state === "needs_review";

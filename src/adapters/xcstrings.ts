@@ -149,6 +149,7 @@ export const xcstringsAdapter: Adapter = {
     const data = JSON.parse(original) as Catalog;
     data.strings ??= {};
     const translations = translationsForFile(file, output);
+    const changed = new Set<string>();
     let injected = 0;
     let skipped = 0;
     for (const item of file.items) {
@@ -166,11 +167,18 @@ export const xcstringsAdapter: Adapter = {
         const loc = entry.localizations[output.targetLanguage];
         loc.variations ??= { plural: {} };
         loc.variations.plural ??= {};
-        loc.variations.plural[plural] = { stringUnit: { state, value } };
+        const form = loc.variations.plural[plural] ?? {};
+        loc.variations.plural[plural] = { ...form, stringUnit: { ...(form.stringUnit ?? {}), state, value } };
       } else {
-        entry.localizations[output.targetLanguage] = { stringUnit: { state, value } };
+        const loc = (entry.localizations[output.targetLanguage] ??= {});
+        loc.stringUnit = { ...(loc.stringUnit ?? {}), state, value };
       }
+      changed.add(baseKey);
       injected += 1;
+    }
+    for (const key of changed) {
+      const entry = data.strings[key];
+      if (entry && hasCompleteTarget(entry, output.targetLanguage)) delete entry.extractionState;
     }
     await atomicWriteText(abs, formatXcstrings(data, original));
     return injectSummary(file.path, injected, skipped, validation.warnings);
@@ -217,6 +225,10 @@ function targetUnits(entry: Entry, lang: string): Array<{ state?: string; value?
     return [...forms].map((form) => loc?.variations?.plural?.[form]?.stringUnit ?? {});
   }
   return [loc?.stringUnit ?? {}];
+}
+
+function hasCompleteTarget(entry: Entry, lang: string): boolean {
+  return targetUnits(entry, lang).every((unit) => Boolean(unit.value));
 }
 
 function flattenCatalog(data: Catalog, sourceLanguage: string, targetLanguage: string): Flat[] {

@@ -7,13 +7,13 @@ const PATTERNS = [
 ];
 
 export function extractPlaceholders(value: string): string[] {
-  const found = new Set<string>();
+  const found: string[] = [];
   for (const pattern of PATTERNS) {
     for (const match of value.matchAll(pattern)) {
-      found.add(match[0]);
+      found.push(match[0]);
     }
   }
-  return [...found].sort();
+  return found.sort();
 }
 
 export function comparePlaceholders(source: string[], targetValue: string): string[] {

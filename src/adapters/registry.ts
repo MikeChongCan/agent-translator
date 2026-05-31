@@ -1,3 +1,4 @@
+import path from "node:path";
 import type { Adapter, FormatId } from "../types";
 import { androidXmlAdapter } from "./android-xml";
 import { chromeJsonAdapter } from "./chrome-json";
@@ -22,11 +23,12 @@ export function adapterForFormat(format: FormatId): Adapter {
 }
 
 export function adapterForPath(file: string): Adapter | null {
-  if (file.endsWith(".xcstrings")) return xcstringsAdapter;
-  if (file.endsWith(".po")) return poAdapter;
-  if (file.endsWith("messages.json") && file.includes("_locales")) return chromeJsonAdapter;
-  if (file.endsWith("strings.xml") && file.includes("/res/values")) return androidXmlAdapter;
-  if (/config\/locales\/.*\.ya?ml$/.test(file)) return railsYamlAdapter;
-  if (file.includes("fastlane/metadata/")) return fastlaneMetadataAdapter;
+  const normalized = file.split(path.sep).join("/");
+  if (normalized.endsWith(".xcstrings")) return xcstringsAdapter;
+  if (normalized.endsWith(".po")) return poAdapter;
+  if (normalized.endsWith("messages.json") && normalized.includes("_locales")) return chromeJsonAdapter;
+  if (normalized.endsWith("strings.xml") && normalized.includes("/res/values")) return androidXmlAdapter;
+  if (/config\/locales\/.*\.ya?ml$/.test(normalized)) return railsYamlAdapter;
+  if (normalized.includes("fastlane/metadata/")) return fastlaneMetadataAdapter;
   return null;
 }
