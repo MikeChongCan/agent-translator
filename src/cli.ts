@@ -5,7 +5,17 @@ import path from "node:path";
 import { writeFile } from "node:fs/promises";
 import { stat } from "node:fs/promises";
 import { adapterForFormat } from "./adapters/registry";
-import { buildPrompt, createJob, discoverFiles, discoverForInput, readJob, readTranslations, writeJob } from "./job";
+import {
+  buildPrompt,
+  createJob,
+  discoverFiles,
+  discoverForInput,
+  readJob,
+  readTranslations,
+  translationsForJobFile,
+  validateJobTranslationOutput,
+  writeJob,
+} from "./job";
 import { loadConfig } from "./utils/config";
 import { ensureDir } from "./utils/fs";
 import { listResources, scaffoldSkill, showResource } from "./resources";
@@ -142,8 +152,9 @@ program
     const job = await readJob(path.resolve(jobDir));
     const config = await loadConfig(job.root);
     const output = await readTranslations(path.resolve(options.translations));
+    validateJobTranslationOutput(job, output);
     for (const file of job.files) {
-      const result = await adapterForFormat(file.format).inject(file, output, config, options.state);
+      const result = await adapterForFormat(file.format).inject(file, translationsForJobFile(file, output), config, options.state);
       console.log(`${result.file}: injected=${result.injected} skipped=${result.skipped}`);
       for (const warning of result.warnings) console.warn(`  warning: ${warning}`);
     }

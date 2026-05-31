@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ExtractOptions, TranslationJob, TranslationOutput } from "./types";
+import type { ExtractOptions, FileJob, TranslationJob, TranslationOutput } from "./types";
 import { adapterForFormat, adapterForPath, adapters } from "./adapters/registry";
 import { ensureDir, readJson, writeJson } from "./utils/fs";
 import type { ResolvedConfig, DiscoveredFile } from "./types";
@@ -199,6 +199,33 @@ export async function readJob(jobDir: string): Promise<TranslationJob> {
 
 export async function readTranslations(file: string): Promise<TranslationOutput> {
   return readJson<TranslationOutput>(file);
+}
+
+export function validateJobTranslationOutput(job: TranslationJob, output: TranslationOutput): void {
+  if (output.targetLanguage !== job.targetLanguage) {
+    throw new Error(`translations targetLanguage ${output.targetLanguage} does not match job targetLanguage ${job.targetLanguage}`);
+  }
+  const known = new Set(job.files.flatMap((file) => file.items.map((item) => item.id)));
+  const seen = new Set<string>();
+  const errors: string[] = [];
+  for (const translation of output.translations) {
+    if (!known.has(translation.id)) {
+      errors.push(`unknown translation id: ${translation.id}`);
+      continue;
+    }
+    if (seen.has(translation.id)) errors.push(`duplicate translation id: ${translation.id}`);
+    seen.add(translation.id);
+  }
+  if (errors.length > 0) throw new Error(errors.join("\n"));
+}
+
+export function translationsForJobFile(file: FileJob, output: TranslationOutput): TranslationOutput {
+  const ids = new Set(file.items.map((item) => item.id));
+  return {
+    schemaVersion: output.schemaVersion,
+    targetLanguage: output.targetLanguage,
+    translations: output.translations.filter((translation) => ids.has(translation.id)),
+  };
 }
 
 export function buildPrompt(job: TranslationJob): string {

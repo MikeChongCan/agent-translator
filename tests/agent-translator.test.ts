@@ -463,6 +463,58 @@ test("CLI review and all extraction prefill existing translations", async () => 
   expect(allTranslations.translations.find((item) => item.id.includes("Cancel"))?.translation).toBe("");
 });
 
+test("CLI inject applies multi-file review jobs without rejecting sibling file ids", async () => {
+  await write(
+    "ScreenKite/InfoPlist.xcstrings",
+    JSON.stringify({
+      sourceLanguage: "en",
+      version: "1.0",
+      strings: {
+        NSCameraUsageDescription: {
+          localizations: {
+            en: { stringUnit: { state: "translated", value: "Camera access is used to record your camera overlay." } },
+            "zh-Hans": { stringUnit: { state: "translated", value: "旧相机权限文案" } },
+          },
+        },
+      },
+    })
+  );
+  await write(
+    "ScreenKite/Localizable.xcstrings",
+    JSON.stringify({
+      sourceLanguage: "en",
+      version: "1.0",
+      strings: {
+        "Stop Recording": {
+          comment: "Screen recording button",
+          localizations: {
+            en: { stringUnit: { state: "translated", value: "Stop Recording" } },
+            "zh-Hans": { stringUnit: { state: "translated", value: "停止录音" } },
+          },
+        },
+      },
+    })
+  );
+  const repo = path.resolve(import.meta.dir, "..");
+  const out = path.join(root, ".agent-translator/jobs/zh-Hans-review");
+  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} extract ${root} --target zh-Hans --review --out ${out}`.quiet();
+  const translations = JSON.parse(await read(".agent-translator/jobs/zh-Hans-review/translations.json")) as TranslationOutput;
+  for (const item of translations.translations) {
+    if (item.id.includes("NSCameraUsageDescription")) item.translation = "ScreenKite 需要访问摄像头，以便录制摄像头画面叠层。";
+    if (item.id.includes("Stop Recording")) item.translation = "停止录制";
+  }
+  await write(".agent-translator/jobs/zh-Hans-review/translations.json", JSON.stringify(translations, null, 2));
+
+  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} inject ${out} --translations ${path.join(out, "translations.json")} --state translated`.quiet();
+
+  const infoPlist = JSON.parse(await read("ScreenKite/InfoPlist.xcstrings"));
+  const localizable = JSON.parse(await read("ScreenKite/Localizable.xcstrings"));
+  expect(infoPlist.strings.NSCameraUsageDescription.localizations["zh-Hans"].stringUnit.value).toBe(
+    "ScreenKite 需要访问摄像头，以便录制摄像头画面叠层。"
+  );
+  expect(localizable.strings["Stop Recording"].localizations["zh-Hans"].stringUnit.value).toBe("停止录制");
+});
+
 test("xcstrings inject clears stale extraction state after target is complete", async () => {
   await write(
     "Localizable.xcstrings",
