@@ -252,6 +252,7 @@ Items: ${count}
 
 Rules:
 - Inspect surrounding source code when a string is ambiguous.
+- Use each job item comment field as first-class context; comments may contain Xcode key comments, PO translator/extracted/reference comments, or platform metadata.
 - Preserve placeholders exactly.
 - Preserve XML, ICU, printf, Rails, and Chrome placeholder syntax.
 - Keep brand names, URLs, legal terms, pricing, privacy claims, and support links accurate.
@@ -261,7 +262,7 @@ Rules:
 
 ${glossary.length > 0 ? `Forbidden terms in this job: ${[...new Set(glossary)].join(", ")}\n` : ""}
 Workflow:
-1. Read job.json.
+1. Read job.json, especially item source, key, comment, existingTarget, state, and placeholders.
 2. ${reviewJob ? "Audit and revise entries in translations.json." : "Translate entries into translations.json."}
 3. Run agent-translator inject <job-dir> --translations <job-dir>/translations.json, or use npx/bunx agent-translator when the binary is not already on PATH.
 4. Run agent-translator validate on changed files.

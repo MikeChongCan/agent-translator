@@ -304,7 +304,7 @@ function poKey(entry: PoMessage, idx?: number): string {
 }
 
 function poComment(entry: PoMessage): string | undefined {
-  return [entry.comments?.extracted, entry.comments?.reference].filter(Boolean).join("\n") || undefined;
+  return [entry.comments?.translator, entry.comments?.extracted, entry.comments?.reference].filter(Boolean).join("\n") || undefined;
 }
 
 function findMessage(data: PoData, context: string, msgid: string): PoMessage | undefined {

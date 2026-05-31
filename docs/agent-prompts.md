@@ -2,7 +2,7 @@
 
 `agent-translator prompt <job-dir>` prints a deterministic prompt for the calling coding agent. The CLI does not call or select other agents.
 
-The calling agent should read `job.json`, fill `translations.json`, then run `inject` and `validate`.
+The calling agent should read `job.json`, fill `translations.json`, then run `inject` and `validate`. Treat each item `comment` as first-class translation context; it may include Xcode string comments, PO translator/extracted/reference comments, or platform metadata.
 
 `inject` writes entries as `translated` by default. Use `--state needs_review` only when the resulting app or localization workflow should explicitly flag entries for human confirmation.
 

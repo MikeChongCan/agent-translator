@@ -80,6 +80,7 @@ test("extracts and injects xcstrings simple and plural entries", async () => {
   const file = discovered("Localizable.xcstrings", "xcstrings", ["ja"]);
   const job = await xcstringsAdapter.extract(file, config, { targetLanguage: "ja", mode: "missing" });
   expect(job.items).toHaveLength(2);
+  expect(job.items.find((item) => item.key === "Stop Recording")?.comment).toBe("Screen recording button");
   await xcstringsAdapter.inject(job, output("ja", job.items.map((item) => [item.id, item.key.includes("Stop") ? "録画を停止" : item.source.replace("file", "ファイル")])) as TranslationOutput, config, "translated");
   const raw = await read("Localizable.xcstrings");
   expect(raw).toContain('"sourceLanguage": "en"');
@@ -188,6 +189,14 @@ test("PO extracts only missing plural slots and validates plural placeholders", 
   const validation = await poAdapter.validate(file, config);
   expect(validation.ok).toBe(false);
   expect(validation.errors[0]).toContain("idx");
+});
+
+test("PO extraction exposes translator extracted and reference comments", async () => {
+  await write("ja.po", 'msgid ""\nmsgstr ""\n"Language: ja\\n"\n\n# Translator hint\n#. Screen recording action\n#: Sources/Recorder.swift:42\nmsgid "Stop Recording"\nmsgstr ""\n');
+  const config = await loadConfig(root);
+  const file = discovered("ja.po", "po", ["ja"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "ja", mode: "missing" });
+  expect(job.items[0].comment).toBe("Translator hint\nScreen recording action\nSources/Recorder.swift:42");
 });
 
 test("PO applies needs_review and translated state to fuzzy flags", async () => {
@@ -462,6 +471,7 @@ test("CLI review and all extraction prefill existing translations", async () => 
   expect(reviewJob.files[0].items.map((item) => item.key)).toEqual(["Save"]);
   expect(reviewTranslations.translations[0].translation).toBe("保存");
   expect(reviewPrompt).toContain("Translation Audit Job");
+  expect(reviewPrompt).toContain("comment field as first-class context");
 
   const allOut = path.join(root, ".agent-translator/jobs/ja-all");
   await Bun.$`bun run ${path.join(repo, "src/cli.ts")} extract ${root} --target ja --all --out ${allOut}`.quiet();

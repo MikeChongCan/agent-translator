@@ -8,6 +8,8 @@ Local-first localization CLI for coding-agent translation workflows.
 
 Agent Translator does not call a translation API or run other agents. It discovers localization files, extracts missing translation work, generates prompts and schemas for the calling coding agent, validates translation output, and injects translations back into source files.
 
+When formats provide context comments, extracted `job.json` items include them in `comment`. Coding agents should use those comments as first-class translation context.
+
 ```bash
 bunx agent-translator
 npx agent-translator
