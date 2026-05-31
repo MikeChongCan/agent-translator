@@ -1,7 +1,11 @@
 {
   "name": "agent-translator",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Local-first localization CLI for coding-agent translation workflows.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MikeChongCan/agent-translator"
+  },
   "type": "module",
   "bin": {
     "agent-translator": "dist/cli.js"
