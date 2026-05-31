@@ -1,5 +1,9 @@
 # Agent Translator
 
+<p align="center">
+  <img src="docs/images/cute_robot_goose.svg" alt="Agent Translator Logo" width="180" height="180" />
+</p>
+
 Local-first localization CLI for coding-agent translation workflows.
 
 Agent Translator does not call a translation API or run other agents. It discovers localization files, extracts missing translation work, generates prompts and schemas for the calling coding agent, validates translation output, and injects translations back into source files.
