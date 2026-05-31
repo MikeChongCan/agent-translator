@@ -148,6 +148,7 @@ export const poAdapter: Adapter = {
       touched.add(message);
       injected += 1;
     }
+    if (injected === 0) return injectSummary(file.path, injected, skipped, validation.warnings);
     for (const message of touched) applyPoReviewState(message, _state);
     data.headers ??= {};
     data.headers.Language = output.targetLanguage;

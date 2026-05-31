@@ -109,7 +109,7 @@ export const androidXmlAdapter: Adapter = {
         xml = patchFlatAndroid(xml, item.key, value);
         injected += 1;
       }
-      await atomicWriteText(abs, xml.endsWith("\n") ? xml : `${xml}\n`);
+      if (injected > 0) await atomicWriteText(abs, xml.endsWith("\n") ? xml : `${xml}\n`);
     } else {
       const base = emptyAndroid();
       for (const item of file.items) {
@@ -121,7 +121,7 @@ export const androidXmlAdapter: Adapter = {
         setFlatAndroid(base, item.key, value);
         injected += 1;
       }
-      await atomicWriteText(abs, renderAndroid(base));
+      if (injected > 0) await atomicWriteText(abs, renderAndroid(base));
     }
     return injectSummary(file.path, injected, skipped, validation.warnings);
   },

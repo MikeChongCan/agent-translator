@@ -1,6 +1,6 @@
 {
   "name": "agent-translator",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Local-first localization CLI for coding-agent translation workflows.",
   "repository": {
     "type": "git",

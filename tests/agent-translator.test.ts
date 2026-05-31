@@ -201,6 +201,16 @@ test("PO applies needs_review and translated state to fuzzy flags", async () => 
   expect(await read("ja.po")).not.toContain("#, fuzzy");
 });
 
+test("PO inject does not rewrite file when no translations apply", async () => {
+  const original = 'msgid ""\nmsgstr ""\n"Language: ja\\n"\n"X-Generator: Existing Tool\\n"\n\nmsgid "Save"\nmsgstr ""';
+  await write("ja.po", original);
+  const config = await loadConfig(root);
+  const file = discovered("ja.po", "po", ["ja"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "ja", mode: "missing" });
+  await poAdapter.inject(job, output("ja", []), config, "translated");
+  expect(await read("ja.po")).toBe(original);
+});
+
 test("PO extract and inject create a missing target from source", async () => {
   await write("locale/en/LC_MESSAGES/messages.po", 'msgid ""\nmsgstr ""\n"Language: en\\n"\n\nmsgid "Save %@ file"\nmsgstr "Save %@ file"\n');
   const config = await loadConfig(root);
@@ -515,6 +525,48 @@ test("CLI inject applies multi-file review jobs without rejecting sibling file i
   expect(infoPlist.strings.NSCameraUsageDescription.localizations["zh-Hans"].stringUnit.state).toBe("translated");
   expect(localizable.strings["Stop Recording"].localizations["zh-Hans"].stringUnit.value).toBe("停止录制");
   expect(localizable.strings["Stop Recording"].localizations["zh-Hans"].stringUnit.state).toBe("translated");
+});
+
+test("CLI inject does not rewrite sibling xcstrings files with no applied translations", async () => {
+  const infoPlistOriginal = JSON.stringify({
+    sourceLanguage: "en",
+    version: "1.0",
+    strings: {
+      NSCameraUsageDescription: {
+        localizations: {
+          en: { stringUnit: { state: "translated", value: "Camera access is used to record your camera overlay." } },
+          "zh-Hans": { stringUnit: { state: "translated", value: "旧相机权限文案" } },
+        },
+      },
+    },
+  });
+  await write("ScreenKite/InfoPlist.xcstrings", infoPlistOriginal);
+  await write(
+    "ScreenKite/Localizable.xcstrings",
+    JSON.stringify({
+      sourceLanguage: "en",
+      version: "1.0",
+      strings: {
+        "Stop Recording": {
+          localizations: {
+            en: { stringUnit: { state: "translated", value: "Stop Recording" } },
+            "zh-Hans": { stringUnit: { state: "translated", value: "停止录音" } },
+          },
+        },
+      },
+    })
+  );
+  const repo = path.resolve(import.meta.dir, "..");
+  const out = path.join(root, ".agent-translator/jobs/zh-Hans-review");
+  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} extract ${root} --target zh-Hans --review --out ${out}`.quiet();
+  const translations = JSON.parse(await read(".agent-translator/jobs/zh-Hans-review/translations.json")) as TranslationOutput;
+  translations.translations = translations.translations.filter((item) => item.id.includes("Stop Recording"));
+  translations.translations[0].translation = "停止录制";
+  await write(".agent-translator/jobs/zh-Hans-review/translations.json", JSON.stringify(translations, null, 2));
+
+  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} inject ${out} --translations ${path.join(out, "translations.json")}`.quiet();
+
+  expect(await read("ScreenKite/InfoPlist.xcstrings")).toBe(infoPlistOriginal);
 });
 
 test("xcstrings inject clears stale extraction state after target is complete", async () => {

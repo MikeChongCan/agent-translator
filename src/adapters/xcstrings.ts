@@ -176,6 +176,7 @@ export const xcstringsAdapter: Adapter = {
       changed.add(baseKey);
       injected += 1;
     }
+    if (injected === 0) return injectSummary(file.path, injected, skipped, validation.warnings);
     for (const key of changed) {
       const entry = data.strings[key];
       if (entry && hasCompleteTarget(entry, output.targetLanguage)) delete entry.extractionState;

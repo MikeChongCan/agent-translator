@@ -92,7 +92,7 @@ export const railsYamlAdapter: Adapter = {
       doc.setIn([lang, ...item.key.split(".")], value);
       injected += 1;
     }
-    await atomicWriteText(abs, doc.toString());
+    if (injected > 0) await atomicWriteText(abs, doc.toString());
     return injectSummary(file.path, injected, skipped, validation.warnings);
   },
 

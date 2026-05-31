@@ -113,7 +113,7 @@ export const chromeJsonAdapter: Adapter = {
       target[item.key].message = value;
       injected += 1;
     }
-    await atomicWriteText(abs, `${JSON.stringify(target, null, 2)}\n`);
+    if (injected > 0) await atomicWriteText(abs, `${JSON.stringify(target, null, 2)}\n`);
     return injectSummary(file.path, injected, skipped, validation.warnings);
   },
 
