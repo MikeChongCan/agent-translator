@@ -9,13 +9,14 @@ import { buildPrompt, createJob, discoverFiles, discoverForInput, readJob, readT
 import { loadConfig } from "./utils/config";
 import { ensureDir } from "./utils/fs";
 import { listResources, scaffoldSkill, showResource } from "./resources";
+import pkg from "../package.json";
 
 const program = new Command();
 
 program
   .name("agent-translator")
   .description("Local-first localization CLI for coding-agent translation workflows.")
-  .version("0.1.0");
+  .version(pkg.version);
 
 program.addHelpText(
   "after",

@@ -495,6 +495,13 @@ test("CLI help includes coding-agent quickstart", async () => {
   expect(result).toContain("agent-translator init");
 });
 
+test("CLI --version matches package.json", async () => {
+  const repo = path.resolve(import.meta.dir, "..");
+  const pkg = JSON.parse(await readFile(path.join(repo, "package.json"), "utf8")) as { version: string };
+  const result = await Bun.$`bun run ${path.join(repo, "src/cli.ts")} --version`.text();
+  expect(result.trim()).toBe(pkg.version);
+});
+
 function discovered(filePath: string, format: DiscoveredFile["format"], targets: string[]): DiscoveredFile {
   return { path: filePath, format, targetLanguages: targets, sourceLanguage: "en", confidence: "high", warnings: [] };
 }
