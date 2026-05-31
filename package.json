@@ -1,6 +1,6 @@
 {
   "name": "agent-translator",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Local-first localization CLI for coding-agent translation workflows.",
   "repository": {
     "type": "git",
@@ -37,7 +37,8 @@
     "skills",
     "README.md",
     "VISION.md",
-    "AGENTS.md"
+    "AGENTS.md",
+    "LICENSE"
   ],
   "keywords": [
     "i18n",
@@ -50,7 +51,7 @@
     "android",
     "fastlane"
   ],
-  "author": "",
+  "author": "Mike Chong",
   "license": "MIT",
   "engines": {
     "node": ">=20"

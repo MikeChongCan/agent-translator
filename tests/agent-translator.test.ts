@@ -421,6 +421,48 @@ test("review mode excludes missing items", () => {
   expect(shouldExtract("translated", { targetLanguage: "ja", mode: "review" })).toBe(true);
 });
 
+test("CLI review and all extraction prefill existing translations", async () => {
+  await write(
+    "Localizable.xcstrings",
+    JSON.stringify({
+      sourceLanguage: "en",
+      version: "1.0",
+      strings: {
+        Save: {
+          localizations: {
+            en: { stringUnit: { state: "translated", value: "Save" } },
+            ja: { stringUnit: { state: "translated", value: "保存" } },
+          },
+        },
+        Cancel: {
+          localizations: {
+            en: { stringUnit: { state: "translated", value: "Cancel" } },
+          },
+        },
+      },
+    })
+  );
+  const repo = path.resolve(import.meta.dir, "..");
+  const reviewOut = path.join(root, ".agent-translator/jobs/ja-review");
+  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} extract ${root} --target ja --review --out ${reviewOut}`.quiet();
+  const reviewJob = JSON.parse(await read(".agent-translator/jobs/ja-review/job.json")) as { mode: string; files: Array<{ items: Array<{ key: string }> }> };
+  const reviewTranslations = JSON.parse(await read(".agent-translator/jobs/ja-review/translations.json")) as TranslationOutput;
+  const reviewPrompt = await read(".agent-translator/jobs/ja-review/prompt.md");
+  expect(reviewJob.mode).toBe("review");
+  expect(reviewJob.files[0].items.map((item) => item.key)).toEqual(["Save"]);
+  expect(reviewTranslations.translations[0].translation).toBe("保存");
+  expect(reviewPrompt).toContain("Translation Audit Job");
+
+  const allOut = path.join(root, ".agent-translator/jobs/ja-all");
+  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} extract ${root} --target ja --all --out ${allOut}`.quiet();
+  const allJob = JSON.parse(await read(".agent-translator/jobs/ja-all/job.json")) as { mode: string; files: Array<{ items: Array<{ key: string }> }> };
+  const allTranslations = JSON.parse(await read(".agent-translator/jobs/ja-all/translations.json")) as TranslationOutput;
+  expect(allJob.mode).toBe("all");
+  expect(allJob.files[0].items.map((item) => item.key).sort()).toEqual(["Cancel", "Save"]);
+  expect(allTranslations.translations.find((item) => item.id.includes("Save"))?.translation).toBe("保存");
+  expect(allTranslations.translations.find((item) => item.id.includes("Cancel"))?.translation).toBe("");
+});
+
 test("xcstrings inject clears stale extraction state after target is complete", async () => {
   await write(
     "Localizable.xcstrings",
@@ -492,6 +534,8 @@ test("CLI help includes coding-agent quickstart", async () => {
   const result = await Bun.$`bun run ${path.join(repo, "src/cli.ts")} --help`.text();
   expect(result).toContain("Guide for Codex / Claude Code / Antigravity");
   expect(result).toContain("agent-translator discover .");
+  expect(result).toContain("agent-translator extract . --target ja --review");
+  expect(result).toContain("agent-translator extract . --target ja --mode all");
   expect(result).toContain("agent-translator init");
 });
 

@@ -94,6 +94,7 @@ export interface TranslationJob {
   root: string;
   sourceLanguage: string;
   targetLanguage: string;
+  mode: ExtractOptions["mode"];
   app?: AgentTranslatorConfig["app"];
   files: FileJob[];
   warnings: string[];

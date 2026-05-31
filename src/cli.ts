@@ -34,6 +34,13 @@ Guide for Codex / Claude Code / Antigravity:
     agent-translator inject .agent-translator/jobs/ja --translations .agent-translator/jobs/ja/translations.json
     agent-translator validate .
 
+  Extraction modes:
+
+    agent-translator extract . --target ja                 # missing, stale, needs_review
+    agent-translator extract . --target ja --review        # audit existing translations
+    agent-translator extract . --target ja --all           # audit every translatable string
+    agent-translator extract . --target ja --mode all      # explicit form of --all
+
   If discovery is ambiguous, initialize a manifest only then:
 
     agent-translator init
@@ -91,13 +98,21 @@ program
   .argument("[path]", "Project root or localization file", ".")
   .requiredOption("-t, --target <language>", "Target language")
   .option("--out <dir>", "Output job directory")
-  .addOption(new Option("--mode <mode>", "Extraction mode").choices(["missing", "stale", "needs-review", "all", "review"]).default("missing"))
+  .option("--all", "Extract every translatable item for full AI audit")
+  .option("--review", "Extract translated and needs_review items for AI audit")
+  .addOption(
+    new Option("--mode <mode>", "Extraction mode: missing (default), stale, needs-review, review, all")
+      .choices(["missing", "stale", "needs-review", "all", "review"])
+      .default("missing")
+  )
   .action(async (input, options) => {
+    if (options.all && options.review) throw new Error("Use only one of --all or --review.");
+    const mode = options.all ? "all" : options.review ? "review" : options.mode;
     const context = await commandContext(input);
     const config = await loadConfig(context.root);
     const files = await discoverForInput(context.input, config, options.target);
     const out = path.resolve(options.out ?? `.agent-translator/jobs/${new Date().toISOString().replace(/[:.]/g, "-")}-${options.target}`);
-    const job = await createJob(files, config, { targetLanguage: options.target, mode: options.mode });
+    const job = await createJob(files, config, { targetLanguage: options.target, mode });
     await writeJob(out, job);
     await writeFile(path.join(out, "prompt.md"), buildPrompt(job), "utf8");
     console.log(out);

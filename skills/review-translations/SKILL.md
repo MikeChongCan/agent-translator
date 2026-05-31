@@ -9,3 +9,4 @@ Review generated translations for:
 - Store metadata claim drift.
 - JSON, XML, YAML, PO, or `.xcstrings` syntax validity.
 
+Prefer `agent-translator extract . --target <locale> --review` for existing translated entries, or `--all` for every translatable entry. These modes prefill `translations.json` with existing translations so correct strings can stay unchanged.

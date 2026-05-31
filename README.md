@@ -24,6 +24,16 @@ agent-translator inject .agent-translator/jobs/ja --translations .agent-translat
 agent-translator validate .
 ```
 
+For AI review of existing translations:
+
+```bash
+agent-translator extract . --target ja --review --out .agent-translator/jobs/ja-review
+agent-translator extract . --target ja --all --out .agent-translator/jobs/ja-all
+agent-translator extract . --target ja --mode all
+```
+
+`--review` extracts translated and `needs_review` entries. `--all` extracts every translatable entry. In both modes, `translations.json` is prefilled with existing translations so the calling agent can keep good translations unchanged and edit only weak or context-wrong strings.
+
 `agent-translator init` creates `agent-translator.config.json` only when needed. It will not overwrite an existing manifest unless you pass `--force`.
 
 Supported targets:

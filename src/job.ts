@@ -55,6 +55,7 @@ export async function createJob(files: DiscoveredFile[], config: ResolvedConfig,
     root: config.root,
     sourceLanguage: config.sourceLanguage,
     targetLanguage: options.targetLanguage,
+    mode: options.mode,
     app: config.app,
     files: jobs,
     warnings,
@@ -182,7 +183,13 @@ export async function writeJob(outDir: string, job: TranslationJob): Promise<voi
   await writeJson(path.join(outDir, "translations.json"), {
     schemaVersion: 1,
     targetLanguage: job.targetLanguage,
-    translations: job.files.flatMap((file) => file.items.map((item) => ({ id: item.id, translation: "", notes: "" }))),
+    translations: job.files.flatMap((file) =>
+      file.items.map((item) => ({
+        id: item.id,
+        translation: shouldPrefillTranslation(job.mode) ? (item.existingTarget ?? "") : "",
+        notes: shouldPrefillTranslation(job.mode) && item.existingTarget ? "Existing translation prefilled for audit." : "",
+      }))
+    ),
   });
 }
 
@@ -196,18 +203,24 @@ export async function readTranslations(file: string): Promise<TranslationOutput>
 
 export function buildPrompt(job: TranslationJob): string {
   const count = job.files.reduce((sum, file) => sum + file.items.length, 0);
+  const reviewJob = shouldPrefillTranslation(job.mode);
+  const title = reviewJob ? "Translation Audit Job" : "Translation Job";
+  const task = reviewJob
+    ? "audit existing localization entries with repository context. Keep good translations unchanged and edit translations that are missing, awkward, stale, or context-wrong."
+    : "translate missing localization entries with repository context.";
   const glossary = job.files
     .flatMap((file) => file.items)
     .flatMap((item) => item.constraints?.forbiddenTerms ?? [])
     .filter(Boolean);
-  return `# Translation Job
+  return `# ${title}
 
-You are the calling coding agent. Use this local job to translate missing localization entries with repository context.
+You are the calling coding agent. Use this local job to ${task}
 
 App: ${job.app?.name ?? "(unknown)"}
 Description: ${job.app?.description ?? "(not provided)"}
 Source language: ${job.sourceLanguage}
 Target language: ${job.targetLanguage}
+Mode: ${job.mode}
 Items: ${count}
 
 Rules:
@@ -217,15 +230,19 @@ Rules:
 - Keep brand names, URLs, legal terms, pricing, privacy claims, and support links accurate.
 - For screen/video recording context, do not translate "Recording" as audio recording unless the key or source context explicitly says audio/microphone/voiceover.
 - Output only valid JSON matching translations.schema.json.
-- Fill translations.json with non-empty translations for every item you can translate.
+- ${reviewJob ? "translations.json is prefilled with existing translations where available; keep correct translations unchanged and edit only weak or wrong translations." : "Fill translations.json with non-empty translations for every item you can translate."}
 
 ${glossary.length > 0 ? `Forbidden terms in this job: ${[...new Set(glossary)].join(", ")}\n` : ""}
 Workflow:
 1. Read job.json.
-2. Translate entries into translations.json.
+2. ${reviewJob ? "Audit and revise entries in translations.json." : "Translate entries into translations.json."}
 3. Run agent-translator inject <job-dir> --translations <job-dir>/translations.json, or use npx/bunx agent-translator when the binary is not already on PATH.
 4. Run agent-translator validate on changed files.
 `;
+}
+
+function shouldPrefillTranslation(mode: ExtractOptions["mode"]): boolean {
+  return mode === "all" || mode === "review";
 }
 
 function translationSchema(): Record<string, unknown> {

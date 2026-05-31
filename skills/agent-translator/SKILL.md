@@ -18,6 +18,15 @@ agent-translator prompt .agent-translator/jobs/<locale>
 
 Translate by editing `.agent-translator/jobs/<locale>/translations.json` using repository context. The CLI has no AI, server, or database; it only saves tokens by extracting work, generating prompt/context files, validating constraints, and re-applying translated text.
 
+For audit jobs, use:
+
+```bash
+agent-translator extract . --target <locale> --review --out .agent-translator/jobs/<locale>-review
+agent-translator extract . --target <locale> --all --out .agent-translator/jobs/<locale>-all
+```
+
+`--review` extracts existing translated and needs_review entries. `--all` extracts every translatable entry. Both prefill `translations.json` with existing translations, so keep good translations unchanged and edit only weak, missing, or context-wrong strings.
+
 Then run:
 
 ```bash
