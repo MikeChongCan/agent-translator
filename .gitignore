@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.agent-translator/jobs/
+*.tgz
+.DS_Store
