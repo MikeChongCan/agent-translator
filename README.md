@@ -36,6 +36,8 @@ agent-translator extract . --target ja --mode all
 
 `--review` extracts translated and `needs_review` entries. `--all` extracts every translatable entry. In both modes, `translations.json` is prefilled with existing translations so the calling agent can keep good translations unchanged and edit only weak or context-wrong strings.
 
+For large projects or many target languages, create one job per locale and use your coding tool's subagents or background agents to translate or audit jobs in parallel. The CLI still does not call agents itself.
+
 `agent-translator init` creates `agent-translator.config.json` only when needed. It will not overwrite an existing manifest unless you pass `--force`.
 
 Supported targets:

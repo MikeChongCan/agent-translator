@@ -642,6 +642,7 @@ test("CLI help includes coding-agent quickstart", async () => {
   expect(result).toContain("agent-translator discover .");
   expect(result).toContain("agent-translator extract . --target ja --review");
   expect(result).toContain("agent-translator extract . --target ja --mode all");
+  expect(result).toContain("subagents/background agents");
   expect(result).toContain("agent-translator skills show agent-translator");
   expect(result).toContain("agent-translator init");
 });

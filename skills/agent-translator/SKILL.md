@@ -18,6 +18,8 @@ agent-translator prompt .agent-translator/jobs/<locale>
 
 Translate by editing `.agent-translator/jobs/<locale>/translations.json` using repository context. The CLI has no AI, server, or database; it only saves tokens by extracting work, generating prompt/context files, validating constraints, and re-applying translated text.
 
+For large apps or many target locales, create one job per locale and use available subagents or background agents to work on jobs in parallel. Do not make `agent-translator` call agents; the coding agent owns orchestration.
+
 For audit jobs, use:
 
 ```bash

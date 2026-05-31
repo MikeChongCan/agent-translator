@@ -51,6 +51,9 @@ Guide for Codex / Claude Code / Antigravity:
     agent-translator extract . --target ja --all           # audit every translatable string
     agent-translator extract . --target ja --mode all      # explicit form of --all
 
+  For large projects or many target languages, create one job per locale and use
+  your coding tool's subagents/background agents to translate or audit jobs in parallel.
+
   If discovery is ambiguous, initialize a manifest only then:
 
     agent-translator init
