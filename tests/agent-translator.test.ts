@@ -102,6 +102,49 @@ test("xcstrings preserves existing spaced-colon style when present", async () =>
   expect(await read("Localizable.xcstrings")).toContain('"sourceLanguage" : "en"');
 });
 
+test("xcstrings inject preserves empty entries and missing trailing newline", async () => {
+  // A real Xcode catalog: spaced colon, an untranslated (empty) entry that Xcode
+  // renders multi-line, and no trailing newline at end of file.
+  const original =
+    '{\n  "sourceLanguage" : "en",\n  "strings" : {\n' +
+    '    "Empty" : {\n\n    },\n' +
+    '    "Save" : {\n      "localizations" : {\n        "en" : {\n          "stringUnit" : {\n' +
+    '            "state" : "translated",\n            "value" : "Save"\n          }\n        }\n      }\n    }\n' +
+    '  },\n  "version" : "1.0"\n}';
+  await write("Localizable.xcstrings", original);
+  const config = { ...(await loadConfig(root)), targetLanguages: ["ja"] };
+  const file = discovered("Localizable.xcstrings", "xcstrings", ["ja"]);
+  const job = await xcstringsAdapter.extract(file, config, { targetLanguage: "ja", mode: "missing" });
+  const saveItem = job.items.find((item) => item.key === "Save");
+  expect(saveItem).toBeTruthy();
+  await xcstringsAdapter.inject(job, output("ja", [[saveItem!.id, "保存"]]), config, "translated");
+  const raw = await read("Localizable.xcstrings");
+  // Empty entry stays in Xcode's multi-line form rather than collapsing to `{}`,
+  // which would otherwise cascade into a whole-file reformat diff.
+  expect(raw).toContain('"Empty" : {\n\n    }');
+  expect(raw).not.toContain('"Empty" : {}');
+  // The original had no trailing newline; inject must not introduce one.
+  expect(raw.endsWith("}")).toBe(true);
+  expect(raw.endsWith("}\n")).toBe(false);
+  // The injected translation is present and the catalog is still valid JSON.
+  expect(JSON.parse(raw).strings.Save.localizations.ja.stringUnit.value).toBe("保存");
+});
+
+test("xcstrings inject preserves a trailing newline when the original had one", async () => {
+  const original =
+    '{\n  "sourceLanguage" : "en",\n  "strings" : {\n' +
+    '    "Save" : {\n      "localizations" : {\n        "en" : {\n          "stringUnit" : {\n' +
+    '            "state" : "translated",\n            "value" : "Save"\n          }\n        }\n      }\n    }\n' +
+    '  },\n  "version" : "1.0"\n}\n';
+  await write("Localizable.xcstrings", original);
+  const config = { ...(await loadConfig(root)), targetLanguages: ["ja"] };
+  const file = discovered("Localizable.xcstrings", "xcstrings", ["ja"]);
+  const job = await xcstringsAdapter.extract(file, config, { targetLanguage: "ja", mode: "missing" });
+  await xcstringsAdapter.inject(job, output("ja", [[job.items[0].id, "保存"]]), config, "translated");
+  const raw = await read("Localizable.xcstrings");
+  expect(raw.endsWith("}\n")).toBe(true);
+});
+
 test("xcstrings extracts target-specific plural categories", async () => {
   await write(
     "Localizable.xcstrings",
