@@ -303,11 +303,52 @@ async function knownRegions(file: string): Promise<string[]> {
 }
 
 function formatXcstrings(data: Catalog, originalContent = ""): string {
-  const json = JSON.stringify(data, null, 2);
-  if (usesSpacedColon(originalContent)) {
-    return `${json.replace(/("([^"\\]|\\.)*")\s*:/g, "$1 :")}\n`;
+  const spaced = usesSpacedColon(originalContent);
+  const body = serializeXcstrings(data, 0, spaced) ?? "{}";
+  // Preserve the original file's trailing-newline state so injecting into a
+  // catalog that has no final newline (or has one) stays a minimal diff.
+  // New/empty files default to a trailing newline.
+  const trailing = originalContent === "" || originalContent.endsWith("\n") ? "\n" : "";
+  return `${body}${trailing}`;
+}
+
+// Serialize a catalog the way Xcode's own writer does, so an inject produces a
+// minimal, additive diff instead of reformatting the whole file:
+//  - 2-space indentation, keys in their existing order (never re-sorted),
+//  - the original file's colon style (`"key" : value` vs `"key": value`),
+//  - non-ASCII kept raw (matches `JSON.stringify` and Xcode), and
+//  - Xcode's multi-line empty object / array (`{\n\n  }`) for untranslated
+//    entries, which `JSON.stringify` would otherwise collapse to `{}` and
+//    cascade into a whole-file diff.
+function serializeXcstrings(value: unknown, indent: number, spaced: boolean): string | undefined {
+  const pad = " ".repeat(indent);
+  const childPad = " ".repeat(indent + 2);
+  if (value === null) return "null";
+  if (Array.isArray(value)) {
+    if (value.length === 0) return spaced ? `[\n\n${pad}]` : "[]";
+    // Match JSON.stringify: array holes / undefined / functions serialize as null.
+    const items = value.map((item) => {
+      const serialized = serializeXcstrings(item, indent + 2, spaced);
+      return `${childPad}${serialized ?? "null"}`;
+    });
+    return `[\n${items.join(",\n")}\n${pad}]`;
   }
-  return `${json}\n`;
+  if (typeof value === "object") {
+    // Match JSON.stringify: drop keys whose value serializes to nothing
+    // (undefined / function / symbol) so we never emit invalid `"key" : undefined`.
+    const colon = spaced ? " : " : ": ";
+    const lines: string[] = [];
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      const serialized = serializeXcstrings(val, indent + 2, spaced);
+      if (serialized === undefined) continue;
+      lines.push(`${childPad}${JSON.stringify(key)}${colon}${serialized}`);
+    }
+    if (lines.length === 0) return spaced ? `{\n\n${pad}}` : "{}";
+    return `{\n${lines.join(",\n")}\n${pad}}`;
+  }
+  // JSON.stringify returns undefined for undefined/function/symbol; propagate so
+  // callers can omit object keys or substitute null in arrays, exactly like JSON.stringify.
+  return JSON.stringify(value);
 }
 
 function usesSpacedColon(content: string): boolean {
