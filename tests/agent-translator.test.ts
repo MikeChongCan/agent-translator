@@ -183,6 +183,143 @@ test("extracts and injects PO entries", async () => {
   expect(await read("ja.po")).toContain('msgstr "%@ファイルを保存"');
 });
 
+test("PO inject preserves catalog layout byte-for-byte and only edits the target msgstr", async () => {
+  const original = [
+    'msgid ""',
+    'msgstr ""',
+    '"Content-Type: text/plain; charset=utf-8\\n"',
+    '"X-Generator: @lingui/cli\\n"',
+    '"Language: de\\n"',
+    "",
+    "#. js-lingui-explicit-id",
+    "#: src/App.tsx:10",
+    'msgid "Already translated"',
+    'msgstr "Bereits übersetzt"',
+    "",
+    "#: src/App.tsx:20",
+    "#, javascript-format",
+    'msgid "Hello {name}"',
+    'msgstr ""',
+    "",
+    '#~ msgid "Old removed string"',
+    '#~ msgstr "Alte entfernte Zeichenkette"',
+    "",
+  ].join("\n");
+  await write("de.po", original);
+  const config = await loadConfig(root);
+  const file = discovered("de.po", "po", ["de"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "de", mode: "missing" });
+  // Only the untranslated, non-obsolete entry is surfaced.
+  expect(job.items.map((item) => item.source)).toEqual(["Hello {name}"]);
+  await poAdapter.inject(job, output("de", [[job.items[0].id, "Hallo {name}"]]), config, "translated");
+  const written = await read("de.po");
+  // Header (incl. the upstream X-Generator), comment order, the already-translated
+  // entry, the format flag, and the obsolete entry are all preserved verbatim;
+  // exactly one msgstr line changed.
+  expect(written).toBe(original.replace('msgid "Hello {name}"\nmsgstr ""', 'msgid "Hello {name}"\nmsgstr "Hallo {name}"'));
+  expect(written).toContain("X-Generator: @lingui/cli");
+  expect(written).not.toContain("agent-translator");
+  expect(written).toContain("#~ msgid \"Old removed string\"");
+});
+
+test("PO inject inserts the fuzzy flag in place while keeping existing format flags", async () => {
+  const original = [
+    'msgid ""',
+    'msgstr ""',
+    '"Language: de\\n"',
+    "",
+    "#: src/App.tsx:20",
+    "#, javascript-format",
+    'msgid "Hello {name}"',
+    'msgstr ""',
+    "",
+  ].join("\n");
+  await write("de.po", original);
+  const config = await loadConfig(root);
+  const file = discovered("de.po", "po", ["de"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "de", mode: "missing" });
+  await poAdapter.inject(job, output("de", [[job.items[0].id, "Hallo {name}"]]), config, "needs_review");
+  const written = await read("de.po");
+  expect(written).toContain("#, fuzzy,javascript-format");
+  expect(written).toContain('msgstr "Hallo {name}"');
+  // The reference comment is untouched and still precedes the flag line.
+  expect(written.indexOf("#: src/App.tsx:20")).toBeLessThan(written.indexOf("#, fuzzy"));
+});
+
+test("PO inject serializes multiline and escaped values like pofile", async () => {
+  await write("de.po", 'msgid ""\nmsgstr ""\n"Language: de\\n"\n\nmsgid "Line one\\nLine two"\nmsgstr ""\n\nmsgid "Quote test"\nmsgstr ""\n');
+  const config = await loadConfig(root);
+  const file = discovered("de.po", "po", ["de"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "de", mode: "missing" });
+  const multiline = job.items.find((item) => item.source.includes("\n"));
+  const quote = job.items.find((item) => item.source === "Quote test");
+  await poAdapter.inject(
+    job,
+    output("de", [
+      [multiline!.id, "Zeile eins\nZeile zwei"],
+      [quote!.id, 'Sag "hallo"'],
+    ]),
+    config,
+    "translated"
+  );
+  const written = await read("de.po");
+  expect(written).toContain('msgstr ""\n"Zeile eins\\n"\n"Zeile zwei"');
+  expect(written).toContain('msgstr "Sag \\"hallo\\""');
+});
+
+test("PO inject does not corrupt a sibling entry when entries lack a blank separator", async () => {
+  // Two entries fused without a blank line between them parse as one segment for a
+  // naive line scanner; injecting only the first must never bleed into the second.
+  await write("de.po", 'msgid ""\nmsgstr ""\n"Language: de\\n"\n\nmsgid "A"\nmsgstr ""\nmsgid "B"\nmsgstr ""\n');
+  const config = await loadConfig(root);
+  const file = discovered("de.po", "po", ["de"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "de", mode: "missing" });
+  const itemA = job.items.find((item) => item.source === "A");
+  await poAdapter.inject(job, output("de", [[itemA!.id, "AA"]]), config, "translated");
+  const written = await read("de.po");
+  // A is translated; B remains untranslated (the entry falls back to a safe recompile).
+  expect((written.match(/AA/g) ?? []).length).toBe(1);
+  expect(written).toContain('msgid "B"');
+});
+
+test("PO inject consumes indented continuation lines instead of leaving them stale", async () => {
+  // An indented continuation line is part of the value; replacing the value must
+  // remove it, not leave a dangling `"old"` that re-parses as `neuold`.
+  await write("de.po", 'msgid ""\nmsgstr ""\n"Language: de\\n"\n\nmsgid "Hello"\nmsgstr ""\n "old"\n');
+  const config = await loadConfig(root);
+  const file = discovered("de.po", "po", ["de"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "de", mode: "all" });
+  const hello = job.items.find((item) => item.key.includes("Hello"));
+  expect(hello!.existingTarget).toBe("old");
+  await poAdapter.inject(job, output("de", [[hello!.id, "neu"]]), config, "translated");
+  const written = await read("de.po");
+  expect(written).toContain('msgstr "neu"');
+  expect(written).not.toContain("old");
+  expect(written).not.toContain("neuold");
+});
+
+test("PO inject keeps a new plural slot that the original entry lacks", async () => {
+  // The original has only msgstr[0]; the target locale needs a second form. The
+  // new slot must survive (via the recompile fallback), not be silently dropped.
+  await write("de.po", 'msgid ""\nmsgstr ""\n"Language: de\\n"\n\nmsgid "%d file"\nmsgid_plural "%d files"\nmsgstr[0] ""\n');
+  const config = await loadConfig(root);
+  const file = discovered("de.po", "po", ["de"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "de", mode: "missing" });
+  expect(job.items).toHaveLength(2);
+  await poAdapter.inject(
+    job,
+    output("de", [
+      [job.items[0].id, "%d zero-form"],
+      [job.items[1].id, "%d one-form"],
+    ]),
+    config,
+    "translated"
+  );
+  const written = await read("de.po");
+  expect(written).toContain("%d zero-form");
+  expect(written).toContain("%d one-form");
+});
+
 test("preserves PO plural slots independently", async () => {
   await write("ja.po", 'msgid ""\nmsgstr ""\n"Language: ja\\n"\n\nmsgid "%d file"\nmsgid_plural "%d files"\nmsgstr[0] ""\nmsgstr[1] ""\n');
   const config = await loadConfig(root);

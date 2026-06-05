@@ -123,11 +123,14 @@ export const poAdapter: Adapter = {
     const validation = validateTranslationOutput(file, output);
     if (!validation.ok) throw new Error(validation.errors.join("\n"));
     const abs = path.join(config.root, file.path);
-    const data = existsSync(abs)
-      ? parsePo(await readText(abs))
+    const targetExisted = existsSync(abs);
+    const rawOriginal = targetExisted ? await readText(abs) : null;
+    const data = rawOriginal !== null
+      ? parsePo(rawOriginal)
       : seedTargetPo(await sourcePo(file, config), output.targetLanguage);
     const translations = translationsForFile(file, output);
     const touched = new Set<PoMessage>();
+    const assignments = new Map<PoMessage, Map<number, string>>();
     let injected = 0;
     let skipped = 0;
     for (const item of file.items) {
@@ -146,9 +149,34 @@ export const poAdapter: Adapter = {
       while (message.msgstr.length <= idx) message.msgstr.push("");
       message.msgstr[idx] = value;
       touched.add(message);
+      let perMessage = assignments.get(message);
+      if (!perMessage) {
+        perMessage = new Map();
+        assignments.set(message, perMessage);
+      }
+      perMessage.set(idx, value);
       injected += 1;
     }
     if (injected === 0) return injectSummary(file.path, injected, skipped, validation.warnings);
+
+    // Preferred path: patch the changed msgstr values directly in the original
+    // text so the file stays byte-identical to its prior layout — comment order,
+    // flag lines, obsolete (#~) entries, header fields, and line wrapping are all
+    // preserved verbatim. The replacement values are serialized exactly the way
+    // pofile (and therefore Lingui's PO writer) would, so the result matches what
+    // the upstream toolchain produces. This avoids the large reorder/churn diffs a
+    // full gettext-parser recompile causes on existing catalogs.
+    if (rawOriginal !== null) {
+      const patched = patchPoInPlace(rawOriginal, touched, assignments, _state);
+      if (patched !== null) {
+        await atomicWriteText(abs, patched);
+        return injectSummary(file.path, injected, skipped, validation.warnings);
+      }
+    }
+
+    // Fallback: recompile the whole catalog. Used for brand-new target files (no
+    // original layout to preserve) and any layout the in-place patcher declined to
+    // touch safely (e.g. an expected entry was not found, or CRLF line endings).
     for (const message of touched) applyPoReviewState(message, _state);
     data.headers ??= {};
     data.headers.Language = output.targetLanguage;
@@ -185,6 +213,264 @@ export const poAdapter: Adapter = {
 
 function parsePo(content: string): PoData {
   return gettextParser.po.parse(Buffer.from(content)) as unknown as PoData;
+}
+
+// --- Format-preserving in-place msgstr patching -----------------------------
+//
+// A full gettext-parser recompile rewrites the entire catalog and reorders
+// comments, relocates obsolete entries, and renormalizes headers — producing
+// noisy diffs on tools like Lingui that own their own PO layout. Instead we edit
+// only the msgstr lines of the entries we actually translated, leaving every
+// other byte untouched. Returns the patched text, or null to signal the caller
+// should fall back to the recompile path.
+
+interface PoUpdate {
+  message: PoMessage;
+  assigned: Map<number, string>;
+}
+
+function poEntryKey(msgctxt: string, msgid: string): string {
+  return `${msgctxt}${msgid}`;
+}
+
+function patchPoInPlace(
+  original: string,
+  touched: Set<PoMessage>,
+  assignments: Map<PoMessage, Map<number, string>>,
+  state: InjectState
+): string | null {
+  // CRLF files are left to the recompile path; Lingio/GNU PO output is LF-only.
+  if (original.includes("\r")) return null;
+
+  const updates = new Map<string, PoUpdate>();
+  for (const message of touched) {
+    updates.set(poEntryKey(message.msgctxt ?? "", message.msgid ?? ""), {
+      message,
+      assigned: assignments.get(message) ?? new Map(),
+    });
+  }
+
+  const lines = original.split("\n");
+  const out: string[] = [];
+  const matched = new Set<string>();
+  let i = 0;
+  while (i < lines.length) {
+    // Blank lines separate entries; copy them (and the trailing-newline sentinel)
+    // through verbatim.
+    if (lines[i].trim() === "") {
+      out.push(lines[i]);
+      i += 1;
+      continue;
+    }
+    let j = i;
+    while (j < lines.length && lines[j].trim() !== "") j += 1;
+    const rewritten = rewriteEntry(lines.slice(i, j), updates, state, matched);
+    // A null result means the segment was ambiguous/unsupported (e.g. multiple
+    // msgids fused without a blank separator, a missing plural slot, or an
+    // unexpected flag layout). Bail to the safe recompile path for the whole file.
+    if (rewritten === null) return null;
+    out.push(...rewritten);
+    i = j;
+  }
+
+  // If any entry we meant to translate was not located in the raw text, bail so
+  // the caller recompiles rather than silently dropping a translation.
+  if (matched.size < updates.size) return null;
+
+  // Defense in depth: re-parse the patched text and confirm every value we meant
+  // to write round-trips to exactly what we intended. Any discrepancy (caused by
+  // a layout the line-based patcher mishandled) triggers the safe recompile path,
+  // so a malformed catalog can never be written.
+  const result = out.join("\n");
+  const verify = parsePo(result);
+  for (const update of updates.values()) {
+    const message = findMessage(verify, update.message.msgctxt ?? "", update.message.msgid ?? "");
+    if (!message) return null;
+    for (const [idx, value] of update.assigned) {
+      if ((message.msgstr?.[idx] ?? "") !== value) return null;
+    }
+  }
+  return result;
+}
+
+interface PoField {
+  kw: string;
+  idx: number | null;
+  parts: string[];
+  start: number;
+  end: number;
+}
+
+function rewriteEntry(
+  entryLines: string[],
+  updates: Map<string, PoUpdate>,
+  state: InjectState,
+  matched: Set<string>
+): string[] | null {
+  // Never touch obsolete entries; their content/position must be preserved.
+  if (entryLines.some((line) => line.startsWith("#~"))) return entryLines;
+
+  const fields: PoField[] = [];
+  let cur: PoField | null = null;
+  let flagLineIdx = -1;
+  let multipleFlagLines = false;
+  for (let k = 0; k < entryLines.length; k++) {
+    const line = entryLines[k];
+    // Keyword lines are normally at column 0, but tolerate leading whitespace.
+    const kw = line.match(/^[ \t]*(msgctxt|msgid_plural|msgid|msgstr(?:\[(\d+)\])?)[ \t]+"((?:[^"\\]|\\.)*)"[ \t]*$/);
+    if (kw) {
+      const idx = kw[2] !== undefined ? Number(kw[2]) : kw[1] === "msgstr" ? 0 : null;
+      cur = { kw: kw[1], idx, parts: [kw[3]], start: k, end: k };
+      fields.push(cur);
+      continue;
+    }
+    // Continuation lines may be indented (the GNU PO grammar allows leading
+    // whitespace before the quoted segment). Treat them as part of the current
+    // field so a replacement consumes them — otherwise a stale continuation could
+    // be left dangling after the rewritten value.
+    const cont = line.match(/^[ \t]*"((?:[^"\\]|\\.)*)"[ \t]*$/);
+    if (cont && cur) {
+      cur.parts.push(cont[1]);
+      cur.end = k;
+      continue;
+    }
+    cur = null;
+    if (line.startsWith("#,")) {
+      if (flagLineIdx >= 0) multipleFlagLines = true;
+      flagLineIdx = k;
+    }
+  }
+
+  const fieldValue = (name: string): string | undefined => {
+    const f = fields.find((x) => x.kw === name);
+    return f ? f.parts.map(unescapePo).join("") : undefined;
+  };
+
+  // A well-formed PO entry has exactly one msgid. More than one means several
+  // entries were fused without a blank separator; replacing by slot index would
+  // corrupt the sibling entries, so fall back to the recompile path.
+  const msgidFields = fields.filter((f) => f.kw === "msgid");
+  if (msgidFields.length === 0) return entryLines; // no translatable id present
+  if (msgidFields.length > 1) return null;
+  const msgid = msgidFields[0].parts.map(unescapePo).join("");
+  if (msgid === "") return entryLines; // header entry
+  const key = poEntryKey(fieldValue("msgctxt") ?? "", msgid);
+  const update = updates.get(key);
+  if (!update) return entryLines;
+  // Multiple flag lines would make fuzzy reconciliation ambiguous; recompile.
+  if (multipleFlagLines) return null;
+  matched.add(key);
+
+  // Recompute the fuzzy flag from the entry's final msgstr values, mirroring
+  // applyPoReviewState. Only rewrite the flag line when the fuzzy state actually
+  // flips, so entries keep their existing flags (e.g. javascript-format) byte for
+  // byte.
+  const finalMsgstr = update.message.msgstr ?? [];
+  const incomplete = finalMsgstr.length === 0 || finalMsgstr.some((v) => !v);
+  const fuzzy = state === "needs_review" || incomplete;
+  const origFlags = flagLineIdx >= 0
+    ? entryLines[flagLineIdx].replace(/^#,\s*/, "").split(",").map((f) => f.trim()).filter(Boolean)
+    : [];
+  const wasFuzzy = origFlags.includes("fuzzy");
+
+  let newFlagLine: string | null = null;
+  let dropFlagLine = false;
+  let insertFlag = false;
+  if (fuzzy !== wasFuzzy) {
+    const next = fuzzy ? ["fuzzy", ...origFlags.filter((f) => f !== "fuzzy")] : origFlags.filter((f) => f !== "fuzzy");
+    if (flagLineIdx >= 0) {
+      if (next.length > 0) newFlagLine = `#, ${next.join(",")}`;
+      else dropFlagLine = true;
+    } else if (next.length > 0) {
+      insertFlag = true;
+      newFlagLine = `#, ${next.join(",")}`;
+    }
+  }
+
+  const repByStart = new Map<number, { end: number; newLines: string[] }>();
+  let replacedSlots = 0;
+  for (const f of fields) {
+    if (f.idx === null || (f.kw !== "msgstr" && !f.kw.startsWith("msgstr["))) continue;
+    if (!update.assigned.has(f.idx)) continue;
+    repByStart.set(f.start, { end: f.end, newLines: serializePoField(f.kw, update.assigned.get(f.idx) ?? "") });
+    replacedSlots += 1;
+  }
+  // Every assigned slot must map to an existing msgstr line. A missing slot
+  // (e.g. the original entry has only msgstr[0] but the target locale needs a
+  // new plural form) cannot be inserted safely in place — recompile instead so
+  // the new form is not silently dropped.
+  if (replacedSlots < update.assigned.size) return null;
+
+  const firstKeywordIdx = Math.min(...fields.map((f) => f.start));
+  const result: string[] = [];
+  for (let k = 0; k < entryLines.length; k++) {
+    if (k === flagLineIdx) {
+      if (dropFlagLine) continue;
+      result.push(newFlagLine ?? entryLines[k]);
+      continue;
+    }
+    if (insertFlag && k === firstKeywordIdx) result.push(newFlagLine as string);
+    const rep = repByStart.get(k);
+    if (rep) {
+      result.push(...rep.newLines);
+      k = rep.end;
+      continue;
+    }
+    result.push(entryLines[k]);
+  }
+  return result;
+}
+
+// Serialize one msgstr field exactly as pofile (the writer Lingui uses) does:
+// single-line values stay on one line; values containing newlines become an
+// empty leader line followed by one quoted segment per line, with "\n" appended
+// to all but the last.
+function serializePoField(keyword: string, value: string): string[] {
+  const parts = value.split("\n");
+  if (parts.length > 1) {
+    const out = [`${keyword} ""`, ...parts.map((part) => `"${escapePo(part)}"`)];
+    for (let i = 1; i < out.length - 1; i++) out[i] = `${out[i].slice(0, -1)}\\n"`;
+    return out;
+  }
+  return [`${keyword} "${escapePo(value)}"`];
+}
+
+const PO_ESCAPES: Record<string, string> = {
+  "\x07": "\\a",
+  "\b": "\\b",
+  "\t": "\\t",
+  "\v": "\\v",
+  "\f": "\\f",
+  "\r": "\\r",
+  '"': '\\"',
+  "\\": "\\\\",
+};
+
+function escapePo(value: string): string {
+  return value.replace(/[\x07\b\t\v\f\r"\\]/g, (m) => PO_ESCAPES[m]);
+}
+
+function unescapePo(value: string): string {
+  return value.replace(/\\(.)/g, (_, c: string) => {
+    switch (c) {
+      case "n":
+        return "\n";
+      case "t":
+        return "\t";
+      case "r":
+        return "\r";
+      case "a":
+        return "\x07";
+      case "b":
+        return "\b";
+      case "v":
+        return "\v";
+      case "f":
+        return "\f";
+      default:
+        return c;
+    }
+  });
 }
 
 async function sourcePo(file: { path: string }, config: ResolvedConfig): Promise<PoData> {
