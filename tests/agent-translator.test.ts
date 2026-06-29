@@ -13,6 +13,7 @@ import { railsYamlAdapter } from "../src/adapters/rails-yaml";
 import { fastlaneMetadataAdapter } from "../src/adapters/fastlane-metadata";
 import { comparePlaceholders, extractPlaceholders } from "../src/utils/placeholders";
 import type { DiscoveredFile, TranslationOutput } from "../src/types";
+import YAML from "yaml";
 
 let root = "";
 
@@ -574,6 +575,47 @@ test("Rails YAML supports scoped locale filenames", async () => {
   const file = discovered("config/locales/devise.ja.yml", "rails-yaml", ["ja"]);
   const job = await railsYamlAdapter.extract(file, config, { targetLanguage: "ja", mode: "missing" });
   expect(job.items[0].source).toBe("Failed %{name}");
+});
+
+test("Rails YAML inject preserves sentence keys ending with a period", async () => {
+  await write(
+    "config/locales/en.yml",
+    'en:\n  hub:\n    "Your ideas help shape what we build next.": "Your ideas help shape what we build next."\n'
+  );
+  await write("config/locales/zh-CN.yml", "zh-CN:\n  hub: {}\n");
+  const config = await loadConfig(root);
+  const file = discovered("config/locales/zh-CN.yml", "rails-yaml", ["zh-CN"]);
+  const job = await railsYamlAdapter.extract(file, config, { targetLanguage: "zh-CN", mode: "missing" });
+  expect(job.items[0]?.meta?.yamlPath).toEqual(["hub", "Your ideas help shape what we build next."]);
+  await railsYamlAdapter.inject(
+    job,
+    output("zh-CN", [[job.items[0]!.id, "您的想法将影响我们下一步构建的内容。"]]),
+    config,
+    "translated"
+  );
+  const written = await read("config/locales/zh-CN.yml");
+  expect(written).toContain("您的想法将影响我们下一步构建的内容。");
+  expect(written).not.toMatch(/:\s*\n\s+""?:/);
+  const parsed = YAML.parse(written) as Record<string, Record<string, Record<string, string>>>;
+  expect(parsed["zh-CN"]?.hub?.["Your ideas help shape what we build next."]).toBe("您的想法将影响我们下一步构建的内容。");
+  const validation = await railsYamlAdapter.validate(file, config);
+  expect(validation.ok).toBe(true);
+});
+
+test("Rails YAML validate flags nested empty-string keys", async () => {
+  await write(
+    "config/locales/en.yml",
+    'en:\n  hub:\n    "Your ideas help shape what we build next.": "Your ideas help shape what we build next."\n'
+  );
+  await write(
+    "config/locales/zh-CN.yml",
+    "zh-CN:\n  hub:\n    Your ideas help shape what we build next:\n      \"\": 您的想法将影响我们下一步构建的内容。\n"
+  );
+  const config = await loadConfig(root);
+  const file = discovered("config/locales/zh-CN.yml", "rails-yaml", ["zh-CN"]);
+  const validation = await railsYamlAdapter.validate(file, config);
+  expect(validation.ok).toBe(false);
+  expect(validation.errors.some((error) => error.includes('nested empty-string key ("")'))).toBe(true);
 });
 
 test("extracts and injects Fastlane metadata", async () => {
