@@ -40,9 +40,10 @@ Guide for Codex / Claude Code / Antigravity:
     agent-translator audit .
     agent-translator extract . --target ja --out .agent-translator/jobs/ja
     agent-translator prompt .agent-translator/jobs/ja
-    # Fill .agent-translator/jobs/ja/translations.json
     agent-translator inject .agent-translator/jobs/ja --translations .agent-translator/jobs/ja/translations.json
     agent-translator validate .
+    agent-translator format .
+
 
   Extraction modes:
 
@@ -219,6 +220,28 @@ skills
 program.command("diff").argument("[path]", "Path", ".").action(() => {
   console.log("Use git diff to review injected localization changes.");
 });
+
+program
+  .command("format")
+  .description("Format localization files (e.g. .xcstrings) to match their canonical serialization and minimize whitespace diffs.")
+  .argument("[path]", "Project root or localization file", ".")
+  .action(async (input) => {
+    const context = await commandContext(input);
+    const config = await loadConfig(context.root);
+    const files = await discoverForInput(context.input, config);
+    let formattedCount = 0;
+    for (const file of files) {
+      const adapter = adapterForFormat(file.format);
+      if (adapter.formatFile) {
+        await adapter.formatFile(file, config);
+        console.log(`Formatted ${file.path}`);
+        formattedCount++;
+      }
+    }
+    if (formattedCount === 0) {
+      console.log("No format-supported files found.");
+    }
+  });
 
 if (process.argv.length <= 2) {
   program.outputHelp();

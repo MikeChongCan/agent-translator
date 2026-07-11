@@ -141,4 +141,5 @@ export interface Adapter {
     state: InjectState
   ): Promise<InjectResult>;
   validate(file: DiscoveredFile, config: ResolvedConfig, targetLanguage?: string): Promise<ValidationResult>;
+  formatFile?(file: DiscoveredFile, config: ResolvedConfig): Promise<void>;
 }

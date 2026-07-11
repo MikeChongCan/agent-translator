@@ -885,6 +885,17 @@ test("CLI bundles only the agent-translator skill", async () => {
   expect(result.trim()).toBe("agent-translator/SKILL.md");
 });
 
+test("CLI format normalizes xcstrings spacing and minimizes whitespace diffs", async () => {
+  const original = '{\n  "sourceLanguage": "en",\n  "strings": {\n    "Save": {\n      "localizations": {\n        "ja": {\n          "stringUnit": {\n            "state": "translated",\n            "value": "保存"\n          }\n        }\n      }\n    }\n  }\n}';
+  await write("Localizable.xcstrings", original);
+  const repo = path.resolve(import.meta.dir, "..");
+  await Bun.$`bun run ${path.join(repo, "src/cli.ts")} format ${root}`.quiet();
+  const formatted = await read("Localizable.xcstrings");
+  expect(formatted).toContain('"sourceLanguage" : "en"');
+  expect(formatted).toContain('"strings" : {');
+  expect(formatted).toContain('"Save" : {');
+});
+
 test("CLI --version matches package.json", async () => {
   const repo = path.resolve(import.meta.dir, "..");
   const pkg = JSON.parse(await readFile(path.join(repo, "package.json"), "utf8")) as { version: string };

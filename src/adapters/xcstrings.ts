@@ -207,6 +207,12 @@ export const xcstringsAdapter: Adapter = {
     }
     return { ok: errors.length === 0, file: file.path, errors, warnings };
   },
+  async formatFile(file, config) {
+    const abs = path.join(config.root, file.path);
+    const original = await readText(abs);
+    const data = JSON.parse(original) as Catalog;
+    await atomicWriteText(abs, formatXcstrings(data, original, true));
+  },
 };
 
 function languagesInCatalog(data: Catalog): string[] {
@@ -302,8 +308,8 @@ async function knownRegions(file: string): Promise<string[]> {
   return [];
 }
 
-function formatXcstrings(data: Catalog, originalContent = ""): string {
-  const spaced = usesSpacedColon(originalContent);
+function formatXcstrings(data: Catalog, originalContent = "", forceSpaced?: boolean): string {
+  const spaced = forceSpaced !== undefined ? forceSpaced : usesSpacedColon(originalContent);
   const body = serializeXcstrings(data, 0, spaced) ?? "{}";
   // Preserve the original file's trailing-newline state so injecting into a
   // catalog that has no final newline (or has one) stays a minimal diff.

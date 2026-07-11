@@ -36,9 +36,12 @@ Then run:
 ```bash
 agent-translator inject .agent-translator/jobs/<locale> --translations .agent-translator/jobs/<locale>/translations.json
 agent-translator validate .
+agent-translator format .
 git diff
 ```
 
 `inject` writes `translated` state by default. Add `--state needs_review` only when the user wants the localization tool to flag entries for another review pass.
+
+`format` processes the localization files (such as `.xcstrings`) in-place, applying canonical formatting (e.g., Xcode's space-before-colon layout) to minimize whitespace-only formatting differences in git diffs.
 
 Preserve placeholders exactly. For screen/video recording apps, do not translate “Recording” as audio recording unless nearby code or comments explicitly say audio, microphone, voice, or sound.

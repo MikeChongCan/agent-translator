@@ -11,4 +11,10 @@ agent-translator audit path/to/Localizable.xcstrings
 agent-translator extract path/to/Localizable.xcstrings --target ja
 agent-translator inject .agent-translator/jobs/<job> --translations .agent-translator/jobs/<job>/translations.json
 agent-translator validate path/to/Localizable.xcstrings --target ja
+agent-translator format path/to/Localizable.xcstrings
 ```
+
+### Formatting
+
+Use `format` to normalize the `.xcstrings` catalog layout (using Xcode's canonical space-before-colon styling) and minimize formatting differences in git commits.
+
