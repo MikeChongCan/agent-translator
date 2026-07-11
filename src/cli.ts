@@ -40,10 +40,10 @@ Guide for Codex / Claude Code / Antigravity:
     agent-translator audit .
     agent-translator extract . --target ja --out .agent-translator/jobs/ja
     agent-translator prompt .agent-translator/jobs/ja
+    # Fill .agent-translator/jobs/ja/translations.json
     agent-translator inject .agent-translator/jobs/ja --translations .agent-translator/jobs/ja/translations.json
     agent-translator validate .
     agent-translator format .
-
 
   Extraction modes:
 
