@@ -2,9 +2,9 @@
 import { Command, Option } from "commander";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import { writeFile } from "node:fs/promises";
-import { stat } from "node:fs/promises";
+import { writeFile, stat } from "node:fs/promises";
 import { adapterForFormat } from "./adapters/registry";
+import { extractXcrun, scanSwift } from "./scanner";
 import {
   buildPrompt,
   createJob,
@@ -220,6 +220,47 @@ skills
 program.command("diff").argument("[path]", "Path", ".").action(() => {
   console.log("Use git diff to review injected localization changes.");
 });
+
+program
+  .command("scan")
+  .description("Scan Swift source files for localized strings (Text, String(localized:), etc.) and merge new source keys into .xcstrings without overwriting existing localizations.")
+  .argument("[path]", "Project root or source directory", ".")
+  .option("-c, --catalog <file>", "Target .xcstrings catalog file")
+  .option("--json", "Print JSON summary")
+  .action(async (input, options) => {
+    const root = path.resolve(input);
+    const result = await scanSwift(root, options.catalog);
+    if (options.json) {
+      console.log(JSON.stringify(result, null, 2));
+    } else {
+      console.log(`Scanned ${result.scannedFiles} Swift files in ${root}`);
+      console.log(`Added ${result.addedKeys} new source keys, revived ${result.revivedKeys} stale keys -> ${result.catalogPath}`);
+    }
+  });
+
+program
+  .command("extract-xcrun")
+  .description("Extract localized strings from Swift source files using Xcode native xcstringstool extract (macOS only).")
+  .argument("[path]", "Project root or source directory", ".")
+  .option("-c, --catalog <file>", "Target .xcstrings catalog file")
+  .option("-o, --out-dir <dir>", "Output directory for extracted xcstrings")
+  .option("-s, --sources <files...>", "Specific Swift source files to extract")
+  .action(async (input, options) => {
+    const root = path.resolve(input);
+    const result = await extractXcrun(root, {
+      targetCatalog: options.catalog,
+      outputDirectory: options.outDir,
+      sourceFiles: options.sources,
+    });
+    if (result.ok) {
+      console.log(`Ran: ${result.command}`);
+      if (result.output) console.log(result.output);
+    } else {
+      console.error(`Failed to run: ${result.command}`);
+      if (result.error) console.error(result.error);
+      process.exitCode = 1;
+    }
+  });
 
 program
   .command("format")

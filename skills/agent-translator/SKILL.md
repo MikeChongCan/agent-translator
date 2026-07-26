@@ -5,22 +5,27 @@ description: Use when Codex, Claude Code, or another coding agent needs to local
 
 # Agent Translator
 
-Use `agent-translator --help` first. Let the CLI discover the project and show the exact command surface.
+Use `agent-translator --help` first. Let the CLI discover the project and present its expressive command surface.
 
 Core workflow:
 
 ```bash
+# 1. Discover & scan source files
 agent-translator discover .
+agent-translator scan .                   # Auto-scans Swift source files & merges new keys into .xcstrings
+agent-translator extract-xcrun .           # (Optional macOS) Uses Xcode native xcstringstool extract
+
+# 2. Audit & extract translation jobs
 agent-translator audit .
 agent-translator extract . --target <locale> --out .agent-translator/jobs/<locale>
 agent-translator prompt .agent-translator/jobs/<locale>
 ```
 
-Translate by editing `.agent-translator/jobs/<locale>/translations.json` using repository context. The CLI has no AI, server, or database; it only saves tokens by extracting work, generating prompt/context files, validating constraints, and re-applying translated text.
+Translate by editing `.agent-translator/jobs/<locale>/translations.json` using repository context. The CLI has no AI, server, or database; it saves tokens by extracting work, generating prompt/context files, validating constraints, and re-applying translated text.
 
-Use each `job.json` item `comment` as translation context. It may contain Xcode string comments, PO translator/extracted/reference comments, or platform metadata.
+Use each `job.json` item `comment` as translation context. It contains Xcode string comments, PO translator/extracted/reference comments, or platform metadata.
 
-For large apps or many target locales, create one job per locale and use available subagents or background agents to work on jobs in parallel. Do not make `agent-translator` call agents; the coding agent owns orchestration.
+For large apps or many target locales, create one job per locale and use available subagents or background agents to work on jobs in parallel. The coding agent owns orchestration.
 
 For audit jobs, use:
 
@@ -40,8 +45,8 @@ agent-translator format .
 git diff
 ```
 
-`inject` writes `translated` state by default. Add `--state needs_review` only when the user wants the localization tool to flag entries for another review pass.
+`inject` writes `translated` state by default. Add `--state needs_review` only when flagging entries for another review pass.
 
-`format` processes the localization files (such as `.xcstrings`) in-place, applying canonical formatting (e.g., Xcode's space-before-colon layout) to minimize whitespace-only formatting differences in git diffs.
+`format` processes localization files (such as `.xcstrings`) in-place, applying canonical formatting to minimize whitespace-only diffs.
 
-Preserve placeholders exactly. For screen/video recording apps, do not translate “Recording” as audio recording unless nearby code or comments explicitly say audio, microphone, voice, or sound.
+Preserve placeholders exactly. Match surrounding product context and UI terminology.
