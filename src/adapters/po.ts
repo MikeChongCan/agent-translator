@@ -212,7 +212,13 @@ export const poAdapter: Adapter = {
 };
 
 function parsePo(content: string): PoData {
-  return gettextParser.po.parse(Buffer.from(content)) as unknown as PoData;
+  // Pass the string (not Buffer). gettext-parser defaults Buffer input to
+  // iso-8859-1 when Content-Type has no charset — common in Lingui catalogs with
+  // empty header fields. That re-decodes UTF-8 bytes as Latin-1, so msgids with
+  // em dashes and non-ASCII msgstr values mojibake; inject then falls back to a
+  // full recompile and permanently writes the corruption. String input keeps
+  // UTF-8 (modern PO / Lingui / Weblate catalogs).
+  return gettextParser.po.parse(content) as unknown as PoData;
 }
 
 // --- Format-preserving in-place msgstr patching -----------------------------

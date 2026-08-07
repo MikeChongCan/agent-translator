@@ -184,6 +184,49 @@ test("extracts and injects PO entries", async () => {
   expect(await read("ja.po")).toContain('msgstr "%@ファイルを保存"');
 });
 
+test("PO inject keeps UTF-8 when Lingui Content-Type has no charset", async () => {
+  // Regression: gettext-parser Buffer parse defaults to iso-8859-1 when the
+  // Content-Type header is empty (Lingui). That mojibakes non-ASCII and makes
+  // in-place patch miss em-dash msgids, then recompile permanently corrupts.
+  const original = [
+    'msgid ""',
+    'msgstr ""',
+    '"Project-Id-Version: \\n"',
+    '"Language: ar\\n"',
+    '"Language-Team: \\n"',
+    '"Content-Type: \\n"',
+    '"Content-Transfer-Encoding: \\n"',
+    '"Plural-Forms: \\n"',
+    "",
+    'msgid "Text copied"',
+    'msgstr "تم نسخ النص"',
+    "",
+    'msgid "Test your link first — every purchase counts."',
+    'msgstr ""',
+    "",
+  ].join("\n");
+  await write("ar.po", original);
+  const config = await loadConfig(root);
+  const file = discovered("ar.po", "po", ["ar"]);
+  const job = await poAdapter.extract(file, config, { targetLanguage: "ar", mode: "missing" });
+  expect(job.items).toHaveLength(1);
+  expect(job.items[0].source).toBe("Test your link first — every purchase counts.");
+  expect(job.items[0].source).toContain("\u2014");
+  expect(job.items[0].source).not.toContain("â");
+
+  const translation = "اختبر رابطك أولاً — كل عملية شراء تُحتسب.";
+  await poAdapter.inject(job, output("ar", [[job.items[0].id, translation]]), config, "translated");
+  const written = await read("ar.po");
+  expect(written).toContain('msgstr "تم نسخ النص"');
+  expect(written).toContain(`msgstr "${translation}"`);
+  expect(written).toContain("—");
+  // Mojibake fingerprints from UTF-8-as-Latin-1 re-decode must not appear.
+  expect(written).not.toMatch(/ØªÙ|Ø§Ø®Øª|â\u0080\u0094|Ã/);
+  // Layout-preserving path: empty Content-Type header stays empty (no recompile churn).
+  expect(written).toContain('"Content-Type: \\n"');
+  expect(written).not.toContain("agent-translator");
+});
+
 test("PO inject preserves catalog layout byte-for-byte and only edits the target msgstr", async () => {
   const original = [
     'msgid ""',
